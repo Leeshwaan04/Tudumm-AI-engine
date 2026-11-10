@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tudumm extension preview</title>
+  <meta name="description" content="The Tudumm Chrome extension's real UI (chip, popup, side panel) running outside Chrome on simulated data.">
+  <link rel="icon" href="icons/icon-32.png">
+  <link rel="stylesheet" href="lib/tokens.css">
+  <link rel="stylesheet" href="lib/ui.css">
+  <link rel="stylesheet" href="preview.css">
+  <!-- The real content-script renderer; outside Chrome it only exposes window.TudummChip. -->
+  <script src="content.js"></script>
+  <script src="lib/boot-check.js"></script>
+  <script type="module" src="preview.js"></script>
+</head>
+<body class="pv">
+  <header class="pv-head">
+    <div class="pv-brand">
+      <span id="brand"></span>
+      <span class="pv-kicker mono">Chrome extension · v0.1.0 · preview mode</span>
+    </div>
+    <h1 class="pv-title">The verdict, <em>wherever you chart.</em></h1>
+    <p class="pv-lede">This is the extension's real UI running outside Chrome: the content-script chip on a mock chart page, the toolbar popup and the side panel. Pick a page to simulate and all three follow it. Anything that needs a Chrome API explains itself with <span class="mono">Available when installed</span>.</p>
+    <form class="pv-controls" id="controls" autocomplete="off">
+      <label class="pv-field">
+        <span class="eyebrow">Simulate a page</span>
+        <select id="example" aria-label="Example page to simulate"></select>
+      </label>
+      <label class="pv-field pv-field--grow">
+        <span class="eyebrow">…or paste any URL</span>
+        <span class="pv-url-input">
+          <input id="custom" type="url" inputmode="url" placeholder="https://finance.yahoo.com/quote/NVDA" aria-label="Custom URL to detect">
+          <button class="btn btn--sm" type="submit">Detect</button>
+        </span>
+      </label>
+      <p class="pv-detect mono" id="detect-result" role="status" aria-live="polite"></p>
+    </form>
+  </header>
+
+  <main class="pv-stage">
+    <section class="pv-col pv-col--site" aria-labelledby="lbl-a">
+      <div class="pv-label"><span class="pv-letter mono">A</span><span id="lbl-a">Chip on a supported site</span><span class="pv-aux">content.js · closed Shadow DOM · system fonts</span></div>
+      <div class="browser" id="browser">
+        <div class="browser-top">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="browser-tab" id="tab-title">Loading…</span>
+        </div>
+        <div class="browser-bar"><span class="lock" aria-hidden="true">⌂</span><span class="url mono" id="url"></span><span class="ext-icon" title="Tudumm toolbar icon"><img src="icons/icon-32.png" width="16" height="16" alt=""></span></div>
+        <div class="browser-viewport" id="viewport">
+          <div class="host" id="host"><div class="loading host-empty"><b>Loading the demo…</b></div></div>
+        </div>
+      </div>
+      <p class="pv-cap">Mock host page drawn locally for the demo; it is not the real site. The chip is the exact renderer the content script injects.</p>
+    </section>
+
+    <section class="pv-col" aria-labelledby="lbl-b">
+      <div class="pv-label"><span class="pv-letter mono">B</span><span id="lbl-b">Toolbar popup</span><span class="pv-aux mono">380 × 600</span></div>
+      <div class="frame frame--popup" id="frame-popup-wrap"><iframe id="frame-popup" title="Tudumm popup" width="380" height="600"></iframe></div>
+    </section>
+
+    <section class="pv-col" aria-labelledby="lbl-c">
+      <div class="pv-label"><span class="pv-letter mono">C</span><span id="lbl-c">Side panel</span><span class="pv-aux mono">400 wide</span></div>
+      <div class="frame frame--panel" id="frame-panel-wrap"><iframe id="frame-panel" title="Tudumm side panel" width="400" height="720"></iframe></div>
+    </section>
+  </main>
+
+  <section class="pv-install" aria-labelledby="install-h">
+    <div>
+      <span class="eyebrow">Install the developer build</span>
+      <h2 id="install-h">Four steps, no store listing yet.</h2>
+    </div>
+    <ol class="steps">
+      <li><span class="mono">01</span>Open <code class="mono">chrome://extensions</code> in Chrome 116 or newer.</li>
+      <li><span class="mono">02</span>Switch on <b>Developer mode</b> (top right).</li>
+      <li><span class="mono">03</span>Click <b>Load unpacked</b>.</li>
+      <li><span class="mono">04</span>Select the <code class="mono">Tudumm-AI-engine/extension</code> folder, then pin the two-beat icon.</li>
+    </ol>
+    <p class="pv-cap">Permissions requested: <span class="mono">storage</span>, <span class="mono">sidePanel</span>, <span class="mono">activeTab</span>. The chip runs only on the eight supported sites.</p>
+  </section>
+
+  <footer class="pv-foot">
+    <p class="disclaimer">Tudumm is a prototype. All prices, signals and track-record data are simulated. Nothing here is investment advice. Trading involves risk of loss.</p>
+  </footer>
+</body>
+</html>

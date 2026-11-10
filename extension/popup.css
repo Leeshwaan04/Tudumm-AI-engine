@@ -1,0 +1,82 @@
+/* Popup ≈ 380×600: sticky header, scrolling body, sticky action footer. */
+html, body.popup { width: 380px; height: 600px; }
+body.popup { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+
+.bar {
+  display: flex; align-items: center; gap: 10px;
+  height: 50px; padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  position: relative; z-index: 2;
+}
+.bar .demo-badge { margin-left: 2px; }
+.bar-spacer { flex: 1; }
+
+.view { overflow-y: auto; overflow-x: hidden; padding: 14px 12px 16px; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: 18px; outline: none; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .view { scroll-behavior: auto; } }
+
+.foot {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.foot .btn { width: 100%; }
+
+.here-src { display: inline-flex; gap: 6px; align-items: baseline; min-width: 0; color: var(--text-3); font-size: 10.5px; }
+.here-src b { font-weight: 500; color: var(--text-2); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+
+/* Search */
+.search { position: relative; display: flex; align-items: center; }
+.search svg { position: absolute; left: 11px; color: var(--text-3); pointer-events: none; }
+.search input {
+  width: 100%; height: 38px;
+  padding: 0 34px 0 34px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--bg-raise);
+  font-size: 13px; outline: none;
+}
+.search input::placeholder { color: var(--text-3); }
+.search input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-dim); }
+.search input::-webkit-search-cancel-button { display: none; }
+.search-clear { position: absolute; right: 5px; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); font-size: 16px; line-height: 1; }
+.search-clear:hover { color: var(--text); background: var(--surface-2); }
+.search-hint { margin: 6px 2px 0; color: var(--text-3); font-size: 11px; }
+.search-hint .try { appearance: none; font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--line-strong); border-radius: 3px; padding: 1px 5px; color: var(--text-2); background: var(--bg-raise); }
+.search-hint .try:hover { color: var(--brand); border-color: rgba(245,184,65,.45); }
+
+/* Next-reveal drumroll strip */
+.reveal-strip {
+  appearance: none; width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(245,184,65,.3);
+  background: linear-gradient(90deg, rgba(245,184,65,.1), rgba(245,184,65,.02));
+  color: var(--text); text-align: left;
+}
+.reveal-strip:hover { border-color: rgba(245,184,65,.55); }
+.reveal-strip .rs-text { display: grid; gap: 1px; flex: none; }
+.reveal-strip .rs-text .eyebrow { white-space: nowrap; }
+.reveal-strip .rs-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--brand); font-size: 15px; font-weight: 600; }
+.reveal-strip .rs-sym { margin-left: auto; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.reveal-strip .rs-sym b { color: var(--text); font-weight: 700; }
+
+.more { margin-top: 6px; width: 100%; }
+
+/* Detail */
+.detail-bar { display: flex; align-items: center; gap: 6px; margin: -4px 0 -6px; }
+.detail-bar .btn { padding-left: 6px; }
+.detail-bar .eyebrow { margin-left: auto; }
+.detail-actions { display: grid; gap: 8px; }
+
+/* Loading + error */
+.loading { display: grid; gap: 12px; padding-top: 6px; }
+.loading-card { height: 300px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); padding: 16px; display: grid; align-content: start; gap: 12px; }
+.loading-card i { display: block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); background-size: 200% 100%; animation: reading 1.4s linear infinite; }
+.loading-card i:nth-child(1) { width: 55%; }
+.loading-card i:nth-child(2) { width: 80%; height: 30px; }
+.loading-card i:nth-child(3) { width: 100%; height: 8px; margin-top: 20px; }
+.toasts { bottom: 66px; }
+
+.view > *, .here, .top, .search-wrap { min-width: 0; }

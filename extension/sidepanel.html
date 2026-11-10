@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tudumm side panel</title>
+  <link rel="icon" href="icons/icon-32.png">
+  <link rel="stylesheet" href="lib/tokens.css">
+  <link rel="stylesheet" href="lib/ui.css">
+  <link rel="stylesheet" href="sidepanel.css">
+  <script src="lib/boot-check.js"></script>
+  <script type="module" src="sidepanel.js"></script>
+</head>
+<body class="sp">
+  <header class="sp-bar" id="bar"></header>
+  <nav class="sp-tabs" id="tabs" role="tablist" aria-label="Side panel sections"></nav>
+  <main class="sp-view" id="view" tabindex="-1">
+    <div class="loading" aria-live="polite"><span class="eyebrow">Reading five layers…</span></div>
+  </main>
+</body>
+</html>

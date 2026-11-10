@@ -1,0 +1,488 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { Check, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { SignalCard, regimeLabel } from "../../components/SignalCard";
+import { EmptyState, SessionDot, Switch } from "../../components/ui";
+import { useDocumentTitle } from "../../components/hooks";
+import { instruments, MARKET_ORDER, MARKET_SHORT, STYLE_LABEL, getInstrument, instrumentsIn, riskPerUnit } from "../../engine/seed";
+import type { Instrument, LiveStatus, MarketId, Regime, Style } from "../../engine/types";
+import { isTrade } from "../../engine/types";
+import { LOAD_AT, issuedAtMs, secondsToReveal, useNow, useStatuses, useTick, live } from "../../engine/live";
+import { marketSession } from "../../engine/sessions";
+import { PERSONA_BY_ID, trackingStore, toggleIn, useProfile, useStore, watchlistStore } from "../../engine/profile";
+import { fmtAgo, fmtCountdown, fmtMoney, fmtPrice, fmtSignedPct } from "../../engine/format";
+
+type Sort = "confidence" | "newest" | "rr";
+type DirF = "all" | "LONG" | "SHORT";
+type StatusF = "all" | "active" | "pending" | "t1_hit" | "queued";
+
+const STYLES: Style[] = ["intraday", "swing", "positional", "investing"];
+
+export function Signals() {
+  useDocumentTitle("Signals · Tudumm");
+  const profile = useProfile();
+  const statuses = useStatuses();
+  const defaults = useMemo(
+    () => ({ markets: profile.markets, styles: PERSONA_BY_ID[profile.persona].styles }),
+    [profile.markets, profile.persona],
+  );
+  const [markets, setMarkets] = useState<MarketId[]>(defaults.markets);
+  const [styles, setStyles] = useState<Style[]>(defaults.styles);
+  const [dir, setDir] = useState<DirF>("all");
+  const [status, setStatus] = useState<StatusF>("all");
+  const [sort, setSort] = useState<Sort>("confidence");
+  const [showSit, setShowSit] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // profile edits (onboarding, persona chips) reset the defaults
+  useEffect(() => {
+    setMarkets(defaults.markets);
+    setStyles(defaults.styles);
+  }, [defaults]);
+
+  const resetFilters = () => {
+    setMarkets(defaults.markets);
+    setStyles(defaults.styles);
+    setDir("all");
+    setStatus("all");
+    setSort("confidence");
+    setShowSit(true);
+  };
+  const isDefault =
+    dir === "all" &&
+    status === "all" &&
+    sort === "confidence" &&
+    showSit &&
+    markets.length === defaults.markets.length &&
+    markets.every((m) => defaults.markets.includes(m)) &&
+    styles.length === defaults.styles.length &&
+    styles.every((s) => defaults.styles.includes(s));
+
+  const list = useMemo(() => {
+    const out = instruments.filter((inst) => {
+      if (!markets.includes(inst.market)) return false;
+      const st = statuses[inst.symbol];
+      const s = inst.signal;
+      if (st === "sit_out" || !isTrade(s)) return showSit && status === "all";
+      if (styles.length && !styles.includes(s.style)) return false;
+      if (dir !== "all" && s.direction !== dir) return false;
+      if (status !== "all" && st !== status) return false;
+      return true;
+    });
+    const conf = (i: Instrument) => (isTrade(i.signal) ? i.signal.confidence : -1);
+    const rr = (i: Instrument) => (isTrade(i.signal) ? i.signal.rr2 : -1);
+    out.sort((a, b) => {
+      const qa = statuses[a.symbol] === "queued" ? 1 : 0;
+      const qb = statuses[b.symbol] === "queued" ? 1 : 0;
+      if (qa !== qb) return qb - qa;
+      const sa = statuses[a.symbol] === "sit_out" ? 1 : 0;
+      const sb = statuses[b.symbol] === "sit_out" ? 1 : 0;
+      if (sort !== "newest" && sa !== sb) return sa - sb;
+      if (sort === "confidence") return conf(b) - conf(a);
+      if (sort === "rr") return rr(b) - rr(a);
+      return issuedAtMs(b) - issuedAtMs(a);
+    });
+    return out;
+  }, [markets, styles, dir, status, sort, showSit, statuses]);
+
+  const toggleMarket = (m: MarketId) => setMarkets((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
+  const toggleStyle = (s: Style) => setStyles((l) => (l.includes(s) ? l.filter((x) => x !== s) : [...l, s]));
+  const live_ = instruments.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
+
+  return (
+    <div className="feed">
+      <div className="feed__main">
+        <header className="phead">
+          <div>
+            <p className="eyebrow">Signals · live demo</p>
+            <h1 className="phead__title serif">
+              {live_} live calls, <em>{instruments.filter((i) => statuses[i.symbol] === "sit_out").length} sitting out</em>
+            </h1>
+          </div>
+          <p className="phead__note">
+            Every call has an entry, a stop, two targets and the condition that cancels it. Probability, not promise.
+          </p>
+        </header>
+
+        <RegimeStrip
+          statuses={statuses}
+          selected={markets}
+          onPick={(m) => setMarkets((l) => (l.length === 1 && l[0] === m ? [...MARKET_ORDER] : [m]))}
+        />
+
+        <WatchStrip />
+
+        <button
+          type="button"
+          className="btn filters__toggle"
+          aria-expanded={filtersOpen}
+          aria-controls="feed-filters"
+          onClick={() => setFiltersOpen((o) => !o)}
+        >
+          <SlidersHorizontal size={14} aria-hidden="true" />
+          Filters{!isDefault ? " · customised" : ""}
+          <span className="mono t3">{filtersOpen ? "hide" : "show"}</span>
+        </button>
+        <div className={`filters ${filtersOpen ? "is-open" : ""}`} role="group" aria-label="Filters" id="feed-filters">
+          <div className="filters__row">
+            <span className="filters__lab eyebrow">Market</span>
+            <div className="filters__chips">
+              {MARKET_ORDER.map((m) => (
+                <button key={m} type="button" className="fchip" aria-pressed={markets.includes(m)} onClick={() => toggleMarket(m)}>
+                  {MARKET_SHORT[m]} <span className="count">{instrumentsIn(m).length}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="filters__row">
+            <span className="filters__lab eyebrow">Style</span>
+            <div className="filters__chips">
+              {STYLES.map((s) => (
+                <button key={s} type="button" className="fchip" aria-pressed={styles.includes(s)} onClick={() => toggleStyle(s)}>
+                  {STYLE_LABEL[s]}
+                </button>
+              ))}
+              {styles.length === 0 && <span className="filters__hint">All styles</span>}
+            </div>
+          </div>
+          <div className="filters__row filters__row--tools">
+            <label className="filters__sel">
+              <span className="eyebrow">Direction</span>
+              <select className="select" value={dir} onChange={(e) => setDir(e.target.value as DirF)}>
+                <option value="all">All</option>
+                <option value="LONG">▲ Long</option>
+                <option value="SHORT">▼ Short</option>
+              </select>
+            </label>
+            <label className="filters__sel">
+              <span className="eyebrow">Status</span>
+              <select className="select" value={status} onChange={(e) => setStatus(e.target.value as StatusF)}>
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="pending">Entry pending</option>
+                <option value="t1_hit">T1 hit</option>
+                <option value="queued">Revealing</option>
+              </select>
+            </label>
+            <label className="filters__sel">
+              <span className="eyebrow">Sort</span>
+              <select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+                <option value="confidence">Confidence</option>
+                <option value="newest">Newest</option>
+                <option value="rr">R:R (to T2)</option>
+              </select>
+            </label>
+            <Switch checked={showSit} onChange={setShowSit}>
+              Show sit-outs
+            </Switch>
+            <button type="button" className="btn btn--ghost btn--sm filters__reset" onClick={resetFilters} disabled={isDefault}>
+              <RotateCcw size={13} aria-hidden="true" /> Profile defaults
+            </button>
+          </div>
+        </div>
+
+        <p className="feed__count mono" aria-live="polite">
+          {list.length} of {instruments.length} instruments
+        </p>
+
+        {list.length === 0 ? (
+          <EmptyState
+            title="Nothing matches these filters."
+            action={
+              <button type="button" className="btn" onClick={resetFilters}>
+                <RotateCcw size={14} aria-hidden="true" /> Reset to profile defaults
+              </button>
+            }
+          >
+            {markets.length === 0
+              ? "Select at least one market."
+              : "Tudumm only issues calls when the layers line up, so narrow filters can come up empty."}
+          </EmptyState>
+        ) : (
+          <div className="feed__grid">
+            {list.map((inst, i) => (
+              <SignalCard key={inst.symbol} inst={inst} revealDelay={i < 9 ? 120 + i * 110 : 0} trackable />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <aside className="rail" aria-label="Reveal countdown, sit-outs and your risk">
+        <NextReveal />
+        <SitOutList />
+        <YourRisk />
+      </aside>
+    </div>
+  );
+}
+
+/* ---------- regime strip ---------- */
+export function marketRegime(m: MarketId): Regime | "mixed" {
+  const insts = instrumentsIn(m);
+  const counts = new Map<Regime, number>();
+  for (const i of insts) counts.set(i.signal.regime, (counts.get(i.signal.regime) ?? 0) + 1);
+  const [top, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return n > insts.length / 2 ? top : "mixed";
+}
+
+function RegimeStrip({
+  statuses,
+  selected,
+  onPick,
+}: {
+  statuses: Record<string, LiveStatus>;
+  selected: MarketId[];
+  onPick: (m: MarketId) => void;
+}) {
+  const now = useNow(30_000);
+  return (
+    <div className="regimes" role="list" aria-label="Market regimes">
+      {MARKET_ORDER.map((m) => {
+        const insts = instrumentsIn(m);
+        const liveN = insts.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
+        const sit = insts.filter((i) => statuses[i.symbol] === "sit_out").length;
+        const q = insts.filter((i) => statuses[i.symbol] === "queued").length;
+        const ses = marketSession(m, now);
+        const on = selected.includes(m);
+        return (
+          <button
+            key={m}
+            role="listitem"
+            type="button"
+            className={`regime ${on ? "is-on" : ""}`}
+            onClick={() => onPick(m)}
+            title={`${ses.label} ${ses.status}. Click to show only ${MARKET_SHORT[m]}; click again for all markets.`}
+          >
+            <span className="regime__top">
+              <b>{MARKET_SHORT[m]}</b>
+              <span className="regime__ses">
+                <SessionDot state={ses.state} /> {ses.status}
+              </span>
+            </span>
+            <span className="regime__reg">{regimeLabel(marketRegime(m))}</span>
+            <span className="regime__n mono">
+              {liveN} live · {sit} sitting out{q ? ` · ${q} queued` : ""}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- watchlist strip ---------- */
+function WatchStrip() {
+  const list = useStore(watchlistStore);
+  if (!list.length) return null;
+  return (
+    <div className="wstrip" aria-label="Your watchlist">
+      <span className="eyebrow">Watchlist</span>
+      {list.map((s) => (
+        <WatchPill key={s} symbol={s} />
+      ))}
+    </div>
+  );
+}
+function WatchPill({ symbol }: { symbol: string }) {
+  const inst = getInstrument(symbol)!;
+  const t = useTick(symbol);
+  const chg = ((t.price - inst.prevClose) / inst.prevClose) * 100;
+  return (
+    <Link to={`/app/i/${symbol}`} className="wpill">
+      <b className="mono">{symbol}</b>
+      <span className="mono">{fmtPrice(inst, t.price, { currency: false })}</span>
+      <span className={`mono ${chg >= 0 ? "c-long" : "c-short"}`}>
+        {chg >= 0 ? "▲" : "▼"} {fmtSignedPct(chg)}
+      </span>
+    </Link>
+  );
+}
+
+/* ---------- right rail ---------- */
+export function NextReveal() {
+  const now = useNow();
+  const statuses = useStatuses();
+  const queued = instruments
+    .filter((i) => i.signal.status === "queued")
+    .map((i) => ({ inst: i, left: secondsToReveal(i, now), status: statuses[i.symbol] }));
+  const pending = queued.filter((q) => q.status === "queued").sort((a, b) => a.left - b.left);
+  const revealed = queued.filter((q) => q.status !== "queued");
+  const next = pending[0];
+  return (
+    <section className="panel rpanel">
+      <header className="panel__head">
+        <span className="eyebrow">Drumroll</span>
+        <span className="mono t3 rpanel__meta">{pending.length} queued</span>
+      </header>
+      <div className="panel__body">
+        {next ? (
+          <div className={`drum ${Math.ceil(next.left) <= 3 ? "is-final" : ""}`}>
+            <p className="drum__lab">Next reveal in</p>
+            <p key={Math.ceil(next.left)} className="drum__num mono" aria-live="polite">
+              {fmtCountdown(next.left)}
+            </p>
+            <p className="drum__sub">
+              <span className="mono">{next.inst.symbol}</span> · {next.inst.name} · sealed until then
+            </p>
+            <div className="drum__beats" aria-hidden="true">
+              {Array.from({ length: 12 }, (_, k) => (
+                <i key={k} className={k < 12 - Math.min(12, Math.ceil(next.left)) ? "is-on" : ""} />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="drum drum--done">
+            <p className="drum__lab">All queued calls revealed</p>
+            <p className="drum__sub">New calls are revealed only when the five layers line up. Nothing is forced to fill a schedule.</p>
+          </div>
+        )}
+        {(pending.length > 1 || revealed.length > 0) && (
+          <ul className="rlist">
+            {pending.slice(1).map((q) => (
+              <li key={q.inst.symbol}>
+                <span className="mono">{q.inst.symbol}</span>
+                <span className="t3">in</span>
+                <span className="mono c-brand">{fmtCountdown(q.left)}</span>
+              </li>
+            ))}
+            {revealed.map((q) => (
+              <li key={q.inst.symbol}>
+                <Link to={`/app/i/${q.inst.symbol}`} className="rlist__link mono">
+                  {q.inst.symbol}
+                </Link>
+                <span className="t3">revealed {fmtAgo((now - (live.getRevealedAt(q.inst.symbol) ?? LOAD_AT)) / 60000)}</span>
+                <span className="mono">{q.status === "active" ? "ACTIVE" : "ENTRY PENDING"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SitOutList() {
+  const sits = instruments.filter((i) => i.signal.status === "sit_out");
+  return (
+    <section className="panel rpanel">
+      <header className="panel__head">
+        <span className="eyebrow">Sitting out</span>
+        <span className="mono t3 rpanel__meta">{sits.length}</span>
+      </header>
+      <ul className="sitlist">
+        {sits.map((i) => (
+          <li key={i.symbol}>
+            <Link to={`/app/i/${i.symbol}`} className="sitlist__item">
+              <span className="sitlist__top">
+                <b className="mono">{i.symbol}</b>
+                <span className="chip">{regimeLabel(i.signal.regime)}</span>
+              </span>
+              <span className="sitlist__why">{i.signal.thesis}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function YourRisk() {
+  const profile = useProfile();
+  const tracked = useStore(trackingStore);
+  const statuses = useStatuses();
+  const perTrade = (profile.capital * profile.riskPct) / 100;
+  const items = tracked
+    .map((s) => getInstrument(s))
+    .filter((i): i is Instrument => !!i && isTrade(i.signal))
+    .map((i) => ({ inst: i, status: statuses[i.symbol] }));
+  const open = items.filter((x) => x.status === "active");
+  const be = items.filter((x) => x.status === "t1_hit");
+  const pend = items.filter((x) => x.status === "pending" || x.status === "queued");
+  const total = perTrade * open.length;
+  const pctOfCap = (total / profile.capital) * 100;
+  return (
+    <section className="panel rpanel">
+      <header className="panel__head">
+        <span className="eyebrow">Your risk</span>
+        <Link to="/app/profile" className="u-link rpanel__meta">
+          Edit
+        </Link>
+      </header>
+      <div className="panel__body risk">
+        <dl className="risk__grid mono">
+          <div>
+            <dt>Capital</dt>
+            <dd>{fmtMoney(profile.capital, profile.currency)}</dd>
+          </div>
+          <div>
+            <dt>Risk / trade</dt>
+            <dd>
+              {profile.riskPct}% · {fmtMoney(perTrade, profile.currency)}
+            </dd>
+          </div>
+          <div>
+            <dt>Tracking (active)</dt>
+            <dd>{open.length}</dd>
+          </div>
+        </dl>
+        <div className="risk__total">
+          <span className="eyebrow">Total open risk</span>
+          <span className="risk__num mono">{fmtMoney(total, profile.currency)}</span>
+          <span className="risk__bar" aria-hidden="true">
+            <i style={{ width: `${Math.min(100, pctOfCap * 10)}%` }} className={pctOfCap > 6 ? "is-hot" : ""} />
+          </span>
+          <span className="t3 risk__pct mono">
+            {pctOfCap.toFixed(2)}% of capital{pctOfCap > 6 ? " · heavy: consider fewer concurrent trades" : ""}
+          </span>
+        </div>
+        {items.length === 0 ? (
+          <p className="risk__hint">
+            Press <b>Track</b> on any active card to add its risk here. Capital × risk % × tracked active signals.
+          </p>
+        ) : (
+          <ul className="rlist">
+            {items.map(({ inst, status }) => (
+              <li key={inst.symbol}>
+                <Link to={`/app/i/${inst.symbol}`} className="rlist__link mono">
+                  {inst.symbol}
+                </Link>
+                <span className="t3">
+                  {status === "active"
+                    ? fmtMoney(perTrade, profile.currency)
+                    : status === "t1_hit"
+                      ? "0 · stop at breakeven"
+                      : "not filled yet"}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--icon btn--sm"
+                  aria-label={`Stop tracking ${inst.symbol}`}
+                  onClick={() => toggleIn(trackingStore, inst.symbol)}
+                >
+                  <X size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(be.length > 0 || pend.length > 0) && (
+          <p className="risk__hint">
+            {be.length > 0 && (
+              <>
+                <Check size={12} aria-hidden="true" /> {be.length} at breakeven adds no risk.{" "}
+              </>
+            )}
+            {pend.length > 0 && (
+              <>
+                {pend.length} pending would add {fmtMoney(perTrade * pend.length, profile.currency)} if filled.
+              </>
+            )}
+          </p>
+        )}
+        <p className="risk__fine t3">
+          Per-trade risk sized from stop distance ({items[0] ? `e.g. ${items[0].inst.symbol} risks ${riskPerUnit(items[0].inst.signal as never).toFixed(2)} per unit` : "see any instrument's sizer"}).
+        </p>
+      </div>
+    </section>
+  );
+}

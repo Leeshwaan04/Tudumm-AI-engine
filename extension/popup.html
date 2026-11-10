@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tudumm</title>
+  <link rel="icon" href="icons/icon-32.png">
+  <link rel="stylesheet" href="lib/tokens.css">
+  <link rel="stylesheet" href="lib/ui.css">
+  <link rel="stylesheet" href="popup.css">
+  <script src="lib/boot-check.js"></script>
+  <script type="module" src="popup.js"></script>
+</head>
+<body class="popup">
+  <header class="bar" id="bar"></header>
+  <main class="view" id="view" tabindex="-1">
+    <div class="loading" aria-live="polite">
+      <div class="loading-card"><i></i><i></i><i></i></div>
+      <span class="eyebrow">Reading five layers…</span>
+    </div>
+  </main>
+  <footer class="foot" id="foot"></footer>
+</body>
+</html>

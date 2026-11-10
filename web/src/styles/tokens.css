@@ -1,0 +1,24 @@
+/* Tudumm design tokens (shared verbatim with the extension). Dark theme only for v1. */
+:root {
+  --bg: #0A0B0D;          /* ink */
+  --bg-raise: #0F1114;
+  --surface: #13161B;
+  --surface-2: #191D24;
+  --surface-3: #20252E;
+  --line: #232833;        /* hairlines */
+  --line-strong: #323946;
+  --text: #EEEAE0;        /* warm paper white */
+  --text-2: #A9A69A;
+  --text-3: #807E75;      /* min for small text, keeps ~4.6:1 on --bg */
+  --brand: #F5B841;       /* saffron spotlight */
+  --brand-ink: #1A1305;   /* text on brand */
+  --brand-dim: rgba(245,184,65,.14);
+  --long: #3DD68C;  --long-dim: rgba(61,214,140,.14);
+  --short: #FF5C4D; --short-dim: rgba(255,92,77,.14);
+  --neutral: #8E9AAF; --neutral-dim: rgba(142,154,175,.14);  /* sitting out / pending */
+  --info: #7FA7FF;
+  --radius-sm: 6px; --radius: 10px;
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-ui: "Geist", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+}

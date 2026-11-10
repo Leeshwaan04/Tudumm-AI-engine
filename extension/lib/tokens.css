@@ -1,0 +1,113 @@
+/* Tudumm design tokens + bundled fonts. Extension pages only: the content
+   script never loads these into host pages (it uses system font stacks). */
+
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/instrument-serif-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/instrument-serif-latin-400-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/geist-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/geist-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/geist-mono-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/geist-mono-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  --bg: #0A0B0D;          /* ink */
+  --bg-raise: #0F1114;
+  --surface: #13161B;
+  --surface-2: #191D24;
+  --surface-3: #20252E;
+  --line: #232833;        /* hairlines */
+  --line-strong: #323946;
+  --text: #EEEAE0;        /* warm paper white */
+  --text-2: #A9A69A;
+  --text-3: #807E75;      /* min for small text, keeps ~4.6:1 on --bg */
+  --brand: #F5B841;       /* saffron spotlight */
+  --brand-ink: #1A1305;   /* text on brand */
+  --brand-dim: rgba(245,184,65,.14);
+  --long: #3DD68C;  --long-dim: rgba(61,214,140,.14);
+  --short: #FF5C4D; --short-dim: rgba(255,92,77,.14);
+  --neutral: #8E9AAF; --neutral-dim: rgba(142,154,175,.14);  /* sitting out / pending */
+  --info: #7FA7FF;
+  --radius-sm: 6px; --radius: 10px;
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-ui: "Geist", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-out: cubic-bezier(.2,.7,.2,1);
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--brand); text-underline-offset: 2px; }
+
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+.serif { font-family: var(--font-display); font-weight: 400; }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 10px; border: 3px solid var(--bg); }
+::-webkit-scrollbar-track { background: transparent; }
