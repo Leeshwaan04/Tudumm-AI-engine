@@ -1,6 +1,6 @@
 // India via 5paisa: map Tudumm symbols to 5paisa scrip codes, backfill daily history, and turn
 // MarketFeedV3 ticks into quotes + today's forming daily bar.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { INSTRUMENTS } from "../../worker/src/market/instruments.ts";
 import type { CandleRow, QuoteRow, SnapshotRow } from "../../worker/src/market/types.ts";
@@ -131,16 +131,40 @@ export function resolveScrips(rows: ScripRow[], overrides: Record<string, number
   return { map, notes };
 }
 
-/** Scrip master for NSE cash, cached per IST day under runner/.cache/5paisa/. */
+/** Newest cached scrip master for a segment (any date), or null. */
+export function latestCached(dir: string, segment: string): { file: string; ymd: string } | null {
+  if (!existsSync(dir)) return null;
+  const re = new RegExp(`^scrips-${segment}-(\\d{4}-\\d{2}-\\d{2})\\.csv$`);
+  const hits = readdirSync(dir)
+    .map((f) => ({ f, m: re.exec(f) }))
+    .filter((x): x is { f: string; m: RegExpExecArray } => !!x.m)
+    .sort((a, b) => (a.m[1] as string).localeCompare(b.m[1] as string));
+  const last = hits[hits.length - 1];
+  return last ? { file: join(dir, last.f), ymd: last.m[1] as string } : null;
+}
+
+/**
+ * Scrip master for NSE cash, cached per IST day under runner/.cache/5paisa/. 5paisa rebuilds it around
+ * midnight and answers 404 ("Cache not available ... retry") meanwhile, so a failed download falls back
+ * to the newest cached copy: the codes of these instruments practically never change.
+ */
 export async function loadScrips(fp: FivePaisa, cacheDir: string, overrides: Record<string, number>, nowMs: number) {
   const dir = join(cacheDir, "5paisa");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `scrips-nse_eq-${istYmd(nowMs)}.csv`);
   let csv: string;
+  let fallbackNote: string | null = null;
   if (existsSync(file)) csv = readFileSync(file, "utf8");
   else {
-    csv = await fp.scripMasterCsv("nse_eq");
-    writeFileSync(file, csv);
+    try {
+      csv = await fp.scripMasterCsv("nse_eq");
+      writeFileSync(file, csv);
+    } catch (e) {
+      const old = latestCached(dir, "nse_eq");
+      if (!old) throw e;
+      csv = readFileSync(old.file, "utf8");
+      fallbackNote = `today's scrip master isn't available yet (${e instanceof Error ? e.message : "error"}); using the copy from ${old.ymd}`;
+    }
   }
   let res = resolveScrips(parseScripMaster(csv), overrides);
   // NSE indices may live only in the full master; try it once if any index is unresolved
@@ -158,6 +182,7 @@ export async function loadScrips(fp: FivePaisa, cacheDir: string, overrides: Rec
       /* keep the nse_eq result */
     }
   }
+  if (fallbackNote) res.notes.unshift(fallbackNote);
   return res;
 }
 

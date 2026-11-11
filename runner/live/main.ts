@@ -208,19 +208,21 @@ export async function main(argv: string[]): Promise<number> {
     if (!fp) return false;
     try {
       await fp.login();
-      ist.loginDay = istParts(now).ymd;
       ist.refusals = 0;
-      book.bars.clear(); // yesterday's forming bars are final in D1 already
       log("india", `5paisa login ok (client ${fp.clientCode.replace(/.(?=.{3})/g, "•")})`);
       const { map, notes } = await loadScrips(fp, join(ROOT, "runner", ".cache"), cfg.scripOverrides, now);
+      if (map.size < IN_SYMBOLS.length) throw new Error(`only ${map.size} of ${IN_SYMBOLS.length} India scrips resolved (${notes.join(", ")})`);
       book.setScrips(map);
+      book.bars.clear(); // yesterday's forming bars are final in D1 already
+      // the day only counts as set up once the scrips are known; until then the clock keeps retrying
+      ist.loginDay = istParts(now).ymd;
       log("india", `scrips: ${notes.join(", ")}`);
       return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "login failed";
       // repeated wrong-PIN/TOTP attempts can lock a broker account: stop after two refusals
       if (e instanceof FpError && /refused/.test(msg)) ist.refusals++;
-      ist.nextLoginAt = now + Math.min(15 * 60_000, 60_000 * 2 ** Math.min(ist.refusals + 1, 4));
+      ist.nextLoginAt = now + Math.min(10 * 60_000, 60_000 * 2 ** Math.min(ist.refusals + 1, 3));
       warn("india", msg);
       await indiaHealth(false, msg.slice(0, 180), true);
       if (ist.refusals >= 2) warn("india", "5paisa refused the login twice; India is paused so the account isn't locked. Fix runner/live.env and restart.");

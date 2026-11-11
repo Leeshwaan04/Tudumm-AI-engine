@@ -4,7 +4,10 @@ import "../lib/register.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { base32Decode, totp } from "./totp.ts";
-import { IndiaBook, dayT, istYmd, parseScripMaster, resolveScrips, vixSnapshot } from "./india.ts";
+import { IndiaBook, dayT, istYmd, latestCached, loadScrips, parseScripMaster, resolveScrips, vixSnapshot } from "./india.ts";
+import { mkdtempSync, writeFileSync as wf } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as pj } from "node:path";
 import { feedUrlFor, parseNetDate } from "./fivepaisa.ts";
 
 // RFC 6238 appendix B, SHA-1 seed "12345678901234567890" (base32 GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ); 6-digit = last 6 of the 8-digit values
@@ -116,4 +119,23 @@ test("VIX snapshot: dedupes by date (later wins), sorted, capped at 260", () => 
   assert.equal(s.key, "ctx:IN");
   assert.equal(s.source, "5paisa");
   assert.ok(h.every((x, i) => i === 0 || (h[i - 1] as [string, number])[0] < x[0]));
+});
+
+test("scrip master: a failed download falls back to the newest cached copy (5paisa rebuilds it around midnight)", async () => {
+  const root = mkdtempSync(pj(tmpdir(), "tudumm-sm-"));
+  const dir = pj(root, "5paisa");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(dir, { recursive: true });
+  wf(pj(dir, "scrips-nse_eq-2026-11-09.csv"), "old");
+  wf(pj(dir, "scrips-nse_eq-2026-11-11.csv"), CSV);
+  wf(pj(dir, "scrips-all-2026-11-12.csv"), "other segment");
+  assert.equal(latestCached(dir, "nse_eq")?.ymd, "2026-11-11");
+  assert.equal(latestCached(pj(root, "missing"), "nse_eq"), null);
+  const fp = { scripMasterCsv: async () => { throw new Error("scrip master nse_eq: HTTP 404"); } } as any;
+  const r = await loadScrips(fp, root, {}, Date.UTC(2026, 10, 11, 18, 40)); // 00:10 IST on the 12th
+  assert.equal(r.map.get("RELIANCE")?.code, 2885);
+  assert.equal(r.map.size, 9);
+  assert.match(r.notes[0] ?? "", /isn't available yet .*2026-11-11/);
+  // with no cache at all the error surfaces (the clock retries the login later)
+  await assert.rejects(loadScrips(fp, mkdtempSync(pj(tmpdir(), "tudumm-sm-")), {}, Date.now()), /404/);
 });
