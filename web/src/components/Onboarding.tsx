@@ -215,7 +215,7 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
               Probability, <em>not promise</em>.
             </h2>
             <p className="onb__lede">
-              Tudumm is in beta. Live calls come from engine v0, a rule-based engine that isn't calibrated yet, on free data that can be delayed or end-of-day. Nothing here is investment advice.
+              Tudumm is in beta. Calls are informational, not investment advice, and any call can lose money. Each price shows whether it is real-time or delayed.
               {signedIn ? " Your acceptance is recorded with your account." : " Signing in records your acceptance with your account."}
             </p>
             <div className="consents" role="group" aria-label="Legal documents">

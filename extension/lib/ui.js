@@ -96,8 +96,8 @@ export function dataBadge() {
         title: stale
           ? `Live data, but the last refresh failed: ${dataState.reasonText || "the API didn't answer"} Prices show when they were last updated.`
           : dataState.recorded
-            ? "Preview: a recorded live snapshot. Crypto and the PAXG gold proxy still stream from Binance; other prices stay at their recorded time, shown on each price."
-            : "Live market data from free public sources. Each price shows its freshness: real-time, 15-min delayed, end of day or daily reference.",
+            ? "Preview: a recorded live snapshot. Crypto and gold still stream live; other prices stay at their recorded time, shown on each price."
+            : "Live market data. Each price shows whether it is real-time or delayed.",
       },
       h("i", { class: "data-dot", "aria-hidden": "true" }),
       stale ? "LIVE · STALE" : dataState.recorded ? "LIVE · RECORDED" : "LIVE · BETA",
@@ -179,7 +179,7 @@ export function disclaimer() {
   return h(
     "p",
     { class: "disclaimer" },
-    "Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss. Live signals come from engine v0, which is rule-based and uncalibrated.",
+    "Tudumm is in beta. Signals are informational, not investment advice. Trading involves risk of loss.",
   );
 }
 
@@ -637,7 +637,6 @@ export function setupFacts(engine, symbol) {
     ["Market", `${inst.exchange} · ${inst.currency}`],
     ["Ledger id", `#${s.id}`],
   ];
-  if (inst.live) rows.push(["Engine", "v0 · rule-based, uncalibrated"]);
   if (inst.live && inst.proxyNote) rows.push(["Proxy", inst.proxyNote]);
   return h(
     "section",

@@ -14,6 +14,8 @@
 // Kite or in the relay's Bearer-authenticated claim response. It never appears in browser
 // responses, logs or audit rows. Confirm tokens and state nonces are stored only as hashes.
 import type { Env } from "../env";
+import { BY_SYMBOL } from "../market/instruments";
+import { indiaQuoteProblem } from "../market/watchdog";
 import type { Ctx, RouteDef } from "../api/context";
 import { param, requireAdmin } from "../api/context";
 import { audit, auditStmt } from "../lib/audit";
@@ -471,6 +473,26 @@ async function serverPrice(env: Env, t: OrderTicket): Promise<number | null> {
   }
 }
 
+/**
+ * Real-money guard: during NSE hours, refuse a ticket for an India instrument (or from a call on one)
+ * while Tudumm's own live data for it is stale — the call it came from may already be invalid.
+ */
+async function guardFreshData(env: Env, t: OrderTicket): Promise<void> {
+  let symbol: string | null = null;
+  if (t.signalId) symbol = (await first<{ symbol: string }>(env, "SELECT symbol FROM live_signals WHERE id = ?", t.signalId))?.symbol ?? null;
+  if (!symbol && (t.exchange === "NSE" || t.exchange === "BSE") && BY_SYMBOL.get(t.tradingsymbol)?.market === "IN") symbol = t.tradingsymbol;
+  if (!symbol || BY_SYMBOL.get(symbol)?.market !== "IN") return;
+  const q = await first<{ as_of: string; source: string }>(env, "SELECT as_of, source FROM quotes WHERE symbol = ?", symbol);
+  const p = indiaQuoteProblem(q, Date.now());
+  if (p) {
+    throw new HttpError(409, "data_stale", {
+      message: `Not sent: Tudumm's live data for ${symbol} isn't current (${p.reason}), so the call may already have moved. Restore the live feed, or trade directly in Kite.`,
+      symbol,
+      ageSec: p.ageSec === null ? null : Math.round(p.ageSec),
+    });
+  }
+}
+
 async function createOrder(c: Ctx): Promise<Response> {
   const a = requireAdmin(c);
   requireKite(c.env);
@@ -481,6 +503,7 @@ async function createOrder(c: Ctx): Promise<Response> {
   const [limits, session, today] = await Promise.all([loadLimits(c.env), activeSession(c.env), confirmedToday(c.env)]);
   const t = withServerPrice(parsed, await serverPrice(c.env, parsed));
   const val = enforceLimits(t, limits, { connected: !!session, confirmedToday: today });
+  await guardFreshData(c.env, t);
 
   const id = newId();
   const tag = intentTag(id);
@@ -548,6 +571,7 @@ async function confirmOrder(c: Ctx): Promise<Response> {
   const stored = ticketFromPayload(parseJson<Record<string, string>>(row.payload, {}), row.est_price, row.signal_id);
   const t = withServerPrice(stored, await serverPrice(c.env, stored));
   const val = enforceLimits(t, limits, { connected: !!session, confirmedToday: today });
+  await guardFreshData(c.env, t);
 
   const now = nowIso();
   const queueExpires = isoIn(QUEUE_TTL_MS);

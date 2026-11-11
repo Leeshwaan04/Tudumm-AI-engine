@@ -33,7 +33,6 @@ import { LAYER_QUESTION, layerTone } from "../engine/evidence";
  * sections say so instead of showing made-up numbers.
  */
 const BETA_DISCLAIMER = "Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss.";
-const LIVE_BETA = "Live beta on free data: crypto (real-time), US (15-min delayed), India (end of day), FX (daily reference).";
 /** Fewer closed calls than this are too few to judge. */
 const JUDGE_MIN = 30;
 
@@ -79,7 +78,7 @@ function trackRecordLine(l: ReturnType<typeof useLiveLedger>): string {
   if (l.error) return "The live ledger couldn’t be loaded right now.";
   if (!l.loaded) return "Loading the live ledger…";
   const since = l.startedAt ? fmtAsOf(l.startedAt, { date: true }) : null;
-  if (!since) return "The live track record starts with engine v0’s first call — none is on the ledger yet.";
+  if (!since) return "The live track record starts with the first call — none is on the ledger yet.";
   if (l.n < JUDGE_MIN) return `Live track record started ${since} · ${l.n} closed ${l.n === 1 ? "call" : "calls"} — too few to judge yet.`;
   return `Live track record since ${since} · ${l.n} closed calls.`;
 }
@@ -223,12 +222,6 @@ function Hero() {
             Tudumm reads price, order flow, options, fundamentals and sentiment together, then tells you what to do, where you’d be
             wrong, and how much to risk.
           </p>
-          <p className="hero__beta">
-            <span className="hero__beta-tag mono">
-              <i aria-hidden="true" /> LIVE · BETA
-            </span>
-            <span>{LIVE_BETA}</span>
-          </p>
           <div className="hero__ctas">
             <Link to="/app" className="btn btn--primary btn--lg">
               Open the terminal <ArrowRight size={16} aria-hidden="true" />
@@ -278,7 +271,7 @@ function Hero() {
               )}
               <SignalCard key={inst.symbol} inst={inst} revealDelay={60} variant="hero" />
               <p className="hero__caption mono">
-                {trades ? "Live call · engine v0" : "Live sit-out · no call is open right now"}
+                {trades ? "Live call" : "Live sit-out · no call is open right now"}
                 {picks.length > 1 ? ` · ${paused ? "paused" : "cycling"} · hover to hold` : ""}
               </p>
             </>
@@ -611,7 +604,7 @@ function ProofSection() {
               Every call is hashed onto a chained ledger when it’s issued, and its result is recorded when it closes, wins and losses
               alike. Change one number and the chain breaks at that row. You can check it in your browser.
             </p>
-            <span className="chip chip--brand">Live ledger · engine v0</span>
+            <span className="chip chip--brand">Live ledger</span>
           </div>
         </header>
         <div className="proof-band">
@@ -1073,9 +1066,6 @@ function LandingFooter() {
         </nav>
         <div className="lfoot__legal">
           <p className="disclaimer">{BETA_DISCLAIMER}</p>
-          <p className="disclaimer">
-            {LIVE_BETA} Engine v0 is rule-based and uncalibrated.
-          </p>
           <p className="disclaimer">At launch, Tudumm will register where required (e.g., as a SEBI Research Analyst in India).</p>
           <p className="disclaimer">
             Charts by{" "}

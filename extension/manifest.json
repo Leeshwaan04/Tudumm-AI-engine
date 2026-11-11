@@ -3,7 +3,7 @@
   "name": "Tudumm: Market Signals",
   "short_name": "Tudumm",
   "version": "0.2.0",
-  "description": "Trade setups with defined risk on the charts you open. Live beta on free market data, labelled by freshness. Not advice.",
+  "description": "Trade setups with defined risk on the charts you open. Prices labelled real-time or delayed. Not investment advice.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",

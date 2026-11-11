@@ -102,7 +102,7 @@ export function AlertsPanel({ inst }: { inst: Instrument }) {
   };
 
   const toggleSignals = async (on: boolean) => {
-    if (!signedIn) return needSignIn(`Sign in to be notified when engine v0 issues a new call on ${inst.symbol}.`);
+    if (!signedIn) return needSignIn(`Sign in to be notified when Tudumm issues a new call on ${inst.symbol}.`);
     if (busy) return;
     setBusy(true);
     try {

@@ -215,7 +215,7 @@ function LiveLedger() {
         <section className="panel">
           <div className="panel__body">
             <EmptyState
-              title="The live ledger is empty — engine v0 hasn’t published a call yet."
+              title="The live ledger is empty — no call has been published yet."
               action={
                 <button type="button" className="btn" onClick={() => void load()}>
                   <RefreshCw size={14} aria-hidden="true" /> Check again
@@ -272,7 +272,7 @@ function LiveLedger() {
         <p className="judge__copy">
           {stats.n < JUDGE_MIN
             ? `Win rates and averages over fewer than ${JUDGE_MIN} closed calls are mostly noise. They’re shown below for transparency, not as evidence of an edge.`
-            : "Results are computed in your browser from the close entries below. Engine v0 is uncalibrated; read them as a record, not a promise."}
+            : "Results are computed in your browser from the close entries below. Past results are a record, not a promise of future results."}
         </p>
       </div>
 

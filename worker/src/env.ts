@@ -38,4 +38,6 @@ export interface Env {
   BROKER_VAULT_KEY?: string;
   /** Tests only: honoured ONLY when APP_ENV=development and it is http://127.0.0.1:<port>. */
   KITE_API_BASE?: string;
+  /** ntfy.sh topic for the owner's phone alerts (feed down/recovered, daily Kite login reminder). A long random name. */
+  NTFY_TOPIC?: string;
 }

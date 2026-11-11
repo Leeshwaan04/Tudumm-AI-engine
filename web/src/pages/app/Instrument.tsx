@@ -201,7 +201,7 @@ function SignalPanel({ inst, s }: { inst: Inst; s: TradeSignal }) {
       </p>
       {s.live && (
         <p className="spanel__engine">
-          <EngineTag /> <span className="t3">Confidence is a rule-based score, not a measured hit rate.</span>
+          <EngineTag /> <span className="t3">Confidence ranks setups; it is not a probability of profit.</span>
         </p>
       )}
       <div className="spanel__live">
@@ -533,11 +533,10 @@ function LiveChartPanel({ inst, status }: { inst: Inst; status: ReturnType<typeo
 }
 
 function SourceInline({ source, asOf }: { source?: string; asOf?: string }) {
-  const NAMES: Record<string, string> = { binance: "Binance", cboe: "Cboe (delayed)", "nse-archives": "NSE archives (EOD)", "ecb-frankfurter": "ECB reference rates" };
+  void source; // vendors aren't shown to end users
   return (
     <span className="mono">
-      {source ? (NAMES[source] ?? source) : "source"}
-      {asOf ? ` · as of ${fmtAsOf(asOf, { date: true })}` : ""}
+      {asOf ? `as of ${fmtAsOf(asOf, { date: true })}` : "latest"}
     </span>
   );
 }

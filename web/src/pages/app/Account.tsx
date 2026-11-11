@@ -535,7 +535,7 @@ function NotificationsSection({ me }: { me: Me }) {
           New signals on my watchlist
         </Switch>
         <p className="acct__hint">
-          {a.error && !a.data ? errorText(a.error) : "Fires when engine v0 issues a call on any symbol you've starred. Held or sitting-out calls never notify."}
+          {a.error && !a.data ? errorText(a.error) : "Fires when Tudumm issues a call on any symbol you've starred. Held or sitting-out calls never notify."}
         </p>
       </div>
       <div className="acct__row acct__row--switch">

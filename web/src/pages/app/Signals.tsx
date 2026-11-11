@@ -6,7 +6,7 @@ import { EmptyState, SessionDot, Switch } from "../../components/ui";
 import { useDocumentTitle } from "../../components/hooks";
 import { instruments, MARKET_ORDER, MARKET_SHORT, STYLE_LABEL, getInstrument, instrumentsIn, riskPerUnit, useDataset } from "../../engine/universe";
 import { useData } from "../../components/DataProvider";
-import { EngineTag, LiveUnavailable, NAState, fmtAsOf, sitOutLabel } from "../../components/badges";
+import { LiveUnavailable, NAState, fmtAsOf, sitOutLabel } from "../../components/badges";
 import { marketApi } from "../../api/market";
 import { useApi } from "../../api/useApi";
 import { track } from "../../api/events";
@@ -116,7 +116,7 @@ export function Signals() {
           <header className="phead">
             <div>
               <p className="eyebrow phead__eyebrow">
-                Signals · live beta <EngineTag />
+                Signals
               </p>
             </div>
           </header>
@@ -132,15 +132,14 @@ export function Signals() {
         <header className="phead">
           <div>
             <p className="eyebrow phead__eyebrow">
-              Signals · live beta <EngineTag />
+              Signals
             </p>
             <h1 className="phead__title serif">
               {live_} live calls, <em>{instruments.filter((i) => statuses[i.symbol] === "sit_out").length} sitting out</em>
             </h1>
           </div>
           <p className="phead__note">
-            Real prices from free public sources; calls from engine v0, a transparent rule set whose confidence isn't calibrated yet. Every call has an
-            entry, a stop, two targets and the condition that cancels it.
+            Every call has an entry, a stop, two targets and the condition that cancels it. Calls are informational, not investment advice.
           </p>
         </header>
 
@@ -246,7 +245,7 @@ export function Signals() {
         )}
       </div>
 
-      <aside className="rail" aria-label="Engine status, sit-outs and your risk">
+      <aside className="rail" aria-label="Status, sit-outs and your risk">
         <EngineCadence />
         <AwaitingData />
         <SitOutList />
@@ -363,7 +362,6 @@ function SitOutList() {
                 <b className="mono">{i.symbol}</b>
                 <span className="chip">{sitOutLabel(i.signal.sitOutReason) ?? regimeLabel(i.signal.regime)}</span>
               </span>
-              <span className="sitlist__why">{i.signal.thesis}</span>
             </Link>
           </li>
         ))}
@@ -485,20 +483,17 @@ function EngineCadence() {
   return (
     <section className="panel rpanel">
       <header className="panel__head">
-        <span className="eyebrow">Engine v0</span>
+        <span className="eyebrow">Status</span>
         <span className="mono t3 rpanel__meta">{liveN} open</span>
       </header>
       <div className="panel__body cadence">
         {h.error && !h.data ? (
-          <NAState title="Engine status unavailable" reason="The market health endpoint didn't answer. Prices and calls above are from the last universe refresh." />
+          <NAState title="Status unavailable" reason="Couldn't check the latest status. Prices and calls above are from the last refresh." />
         ) : (
           <>
             <p className="cadence__main">
-              Engine runs every 15 min
-              <span className="mono t2"> · {mins === null ? (h.data ? "no run yet" : "checking…") : `last run ${mins === 0 ? "just now" : `${mins} min ago`}`}</span>
-            </p>
-            <p className="cadence__sub t2">
-              Crypto and the gold proxy are evaluated on each completed 4-hour bar; US, India and FX on each completed daily bar. New calls appear here with a reveal, never on a schedule.
+              Calls checked
+              <span className="mono t2"> {mins === null ? (h.data ? "not yet" : "…") : mins === 0 ? "just now" : `${mins} min ago`}</span>
             </p>
             {h.data?.ledgerEntries !== undefined && (
               <p className="cadence__meta mono t3">
@@ -510,7 +505,7 @@ function EngineCadence() {
             )}
             {bad.length > 0 && (
               <p className="cadence__warn mono">
-                {bad.length} source{bad.length === 1 ? "" : "s"} not reporting: {bad.map((b) => b.source).join(", ")}
+                Some market data is delayed right now. Check each price's freshness before acting.
               </p>
             )}
           </>

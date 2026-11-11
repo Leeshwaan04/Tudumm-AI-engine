@@ -26,7 +26,8 @@
   "triggers": {
     // */15: crypto + gold-proxy engine, US delayed quotes, signal lifecycle, alerts
     // 45 13 * * 1-5: NSE end-of-day files (19:15 IST)   |   30 15 * * 1-5: ECB reference FX (~16:00 CET)
-    "crons": ["*/15 * * * *", "45 13 * * 1-5", "30 15 * * 1-5"]
+    // * 3-10 * * 1-5: every minute 08:30–16:29 IST, India live-feed watchdog (phone alert via NTFY_TOPIC)
+    "crons": ["*/15 * * * *", "45 13 * * 1-5", "30 15 * * 1-5", "* 3-10 * * 1-5"]
   },
   "vars": {
     "APP_ENV": "production",

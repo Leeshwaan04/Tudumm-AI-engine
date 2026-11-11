@@ -340,7 +340,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  align-items: stretch;
+  align-items: start; /* each card is as tall as its own content, not the tallest in its row */
 }
 .feed__count {
   margin: 14px 0 10px;

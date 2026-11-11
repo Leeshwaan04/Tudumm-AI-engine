@@ -127,7 +127,7 @@ function build() {
     "div",
     { class: "data-note" },
     h("b", {}, "Live · beta"),
-    h("span", {}, "Real prices from free public sources, each labelled with its freshness and source. Signals come from engine v0, rule-based and uncalibrated. If the live API can't be reached, the extension says so and retries; it never shows made-up numbers."),
+    h("span", {}, "Real prices, each labelled real-time or delayed. Signals are informational, not investment advice. If the live API can't be reached, the extension says so and retries; it never shows made-up numbers."),
   );
 
   if (!acctPanel) acctPanel = createAccountPanel({ embedded: true, onLinked: () => P.toast("Linked. Your watchlist now syncs with your Tudumm account.", { tone: "ok", timeout: 4000 }) });

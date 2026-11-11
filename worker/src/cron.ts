@@ -8,6 +8,7 @@ import { BINANCE_SET, cryptoJob, dueDailyEvaluations, fxJob, FX_SET, usQuotesJob
 import type { JobOutput } from "./market/jobs";
 import { readFlag, runCycle } from "./market/service";
 import { dispatchOutbox, dispatchPrices } from "./market/outbox";
+import { runWatchdog } from "./market/watchdog";
 
 /** Wraps a MarketDb and counts statements (D1 Free plan allows 50 queries per invocation). */
 function counted(db: MarketDb): MarketDb & { n: number } {
@@ -128,8 +129,12 @@ export async function runScheduled(event: ScheduledController, env: Env, _ctx: E
       case "30 15 * * 1-5":
         msg = await fxCycle(env, now);
         break;
+      case "* 3-10 * * 1-5": // every minute 08:30–16:29 IST on weekdays: India feed watchdog + Kite reminder
+        msg = await runWatchdog(env, d1Db(env.DB), now.getTime(), "india");
+        break;
       default:
         msg = (await runMarketCycle(env, now)).summary;
+        msg += `; ${await runWatchdog(env, d1Db(env.DB), now.getTime(), "crypto")}`;
     }
     console.log(`[cron ${event.cron}] ${msg}`);
   } catch (e) {

@@ -221,9 +221,9 @@ function termsSections(): Section[] {
       body: (
         <>
           <p>
-            Live mode uses free public sources: Binance public market data (crypto, real-time), Cboe delayed quotes (US, 15-minute delayed), NSE
-            archive files (India, end of day), ECB reference rates via Frankfurter (FX, daily), SEC EDGAR (US fundamentals) and alternative.me
-            (crypto sentiment). Each widget names its source and its time.
+            Market data comes from: a broker market-data feed (India, real-time), Binance public market data (crypto, real-time), Cboe
+            delayed quotes (US, 15-minute delayed), NSE archive files (India history and option data, end of day), ECB reference rates via
+            Frankfurter (FX, daily), SEC EDGAR (US fundamentals) and alternative.me (crypto sentiment). Each price shows how fresh it is.
           </p>
           <p>
             Several of these sources restrict commercial use. During the beta Tudumm is offered for evaluation, and we are pursuing proper licences

@@ -1106,6 +1106,8 @@ async function setup(o: { trading?: boolean; connect?: boolean; limits?: Record<
   setLimitsRow(db, { trading_enabled: o.trading === false ? 0 : 1, ...(o.limits ?? {}) });
   let sessionId: string | null = null;
   if (o.connect !== false) sessionId = await connectKite(db);
+  // a fresh live quote for the default ticket symbol, so the NSE-hours stale-data guard passes at any time of day
+  liveQuote(db, "INFY", 1500);
   return { db, env, sessionId };
 }
 
@@ -1269,6 +1271,7 @@ describe("routes.ts: order state machine (D1 shim)", () => {
 
   test("MARKET / SL-M without any live price -> 409 live_price_unavailable (LIMIT still works)", async () => {
     const { db, env } = await setup();
+    db.raw.prepare("DELETE FROM quotes").run();
     let r = await createOrder(env, marketBody());
     assert.equal(r.status, 409);
     assert.equal(r.body.error, "live_price_unavailable");
@@ -1278,7 +1281,45 @@ describe("routes.ts: order state machine (D1 shim)", () => {
     liveQuote(db, "INFY", 1500, 1000, "nse-archives"); // fresh but not a live source -> not trusted
     r = await createOrder(env, marketBody());
     assert.equal(r.body.error, "live_price_unavailable");
+    liveQuote(db, "INFY", 1500); // LIMIT carries its own price (and the live data is current)
     assert.equal((await createOrder(env, limitBody())).status, 201);
+  });
+
+  test("NSE hours: tickets for an India instrument are refused while Tudumm's live data is stale (data_stale)", async (t) => {
+    // Wed 11 Nov 2026 10:30 IST (session open); Date is mocked so the guard and the expiries agree
+    t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 10, 11, 5, 0, 0) });
+    try {
+      const { db, env } = await setup();
+      liveQuote(db, "INFY", 1500, 10 * 60_000); // 10 min old during the session
+      let r = await createOrder(env, limitBody());
+      assert.equal(r.status, 409);
+      assert.equal(r.body.error, "data_stale");
+      assert.match(r.body.message, /INFY/);
+      liveQuote(db, "INFY", 1500, 1000, "nse-archives"); // fresh but end-of-day source
+      assert.equal((await createOrder(env, limitBody())).body.error, "data_stale");
+      liveQuote(db, "INFY", 1500, 1000); // fresh 5paisa
+      const ok = await createOrder(env, limitBody());
+      assert.equal(ok.status, 201);
+      // the data goes stale between create and confirm -> the confirm is refused too
+      liveQuote(db, "INFY", 1500, 10 * 60_000);
+      const f = await confirmOrder(env, ok.body.intent.id, ok.body.confirmToken);
+      assert.equal(f.body.error, "data_stale");
+      // symbols outside Tudumm's universe aren't judged (no live price to compare)
+      assert.equal((await createOrder(env, limitBody({ tradingsymbol: "M&M" }))).status, 201);
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  test("outside NSE hours the stale-data guard doesn't block (after-market orders)", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 10, 11, 14, 0, 0) }); // 19:30 IST
+    try {
+      const { db, env } = await setup();
+      db.raw.prepare("DELETE FROM quotes").run();
+      assert.equal((await createOrder(env, limitBody())).status, 201);
+    } finally {
+      t.mock.timers.reset();
+    }
   });
 
   test("MARKET falls back to Kite's LTP when there's no live Tudumm quote (e.g. F&O, other stocks)", async () => {

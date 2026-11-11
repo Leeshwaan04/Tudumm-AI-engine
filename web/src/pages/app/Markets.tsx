@@ -44,7 +44,7 @@ export default function Markets() {
           <h1 className="phead__title serif">
             {instruments.length} instruments, <em>six markets.</em>
           </h1>
-          <p className="phead__note">Crypto real-time (Binance), US 15-min delayed (Cboe), India end of day (NSE), FX daily reference (ECB). Every price carries its freshness.</p>
+          <p className="phead__note">Every price shows whether it is real-time or delayed.</p>
         </div>
         <div className="mkp__tools">
           <div className="seg" role="group" aria-label="View">

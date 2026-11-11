@@ -401,9 +401,7 @@
         var when = el("span", "when", s.hasPrice ? str(s.asOfText || "", 24) + (s.stale ? " · stale" : "") : "no price yet");
         add(f, fresh, when);
         if (s.proxyText) f.appendChild(el("span", "px", str(s.proxyText, 40)));
-        var eng = el("span", "eng", "ENGINE V0 · UNCALIBRATED");
-        eng.title = "Live signals come from engine v0: fixed rules whose confidence isn't calibrated against outcomes yet. Read it as a ranking.";
-        add(f, eng, el("span", null, "Beta · not investment advice"));
+        add(f, el("span", null, "Beta · not investment advice"));
         return f;
       }
       add(f, el("span", null, "Beta · not investment advice"));

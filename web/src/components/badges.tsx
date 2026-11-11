@@ -7,17 +7,6 @@ import { useEffect, useState } from "react";
 import { useNow } from "../engine/live";
 
 /* ---------------- freshness ---------------- */
-const VENUE: Record<string, string> = {
-  binance: "BINANCE",
-  "binance-futures": "BINANCE",
-  bybit: "BYBIT",
-  cboe: "CBOE",
-  "nse-archives": "NSE",
-  "ecb-frankfurter": "ECB",
-  "sec-edgar": "SEC",
-  "alternative-me": "ALTERNATIVE.ME",
-};
-
 export interface FreshInfo {
   label: string;
   short: string;
@@ -44,43 +33,42 @@ const PROXY_SHORT: Record<string, string> = {
 
 export function freshness(inst: Instrument): FreshInfo | null {
   if (!inst.freshness && !inst.source) return null;
-  const venue = (inst.source && VENUE[inst.source]) || null;
   let label: string;
   let short: string;
   let tone: FreshInfo["tone"];
   switch (inst.freshness) {
     case "realtime":
-      label = `REAL-TIME · ${venue ?? "BINANCE"}`;
+      label = "REAL-TIME";
       short = "RT";
       tone = "rt";
       break;
     case "delayed-15m":
-      label = `DELAYED 15M · ${venue ?? "CBOE"}`;
+      label = "DELAYED 15 MIN";
       short = "15M";
       tone = "delayed";
       break;
     case "eod":
-      label = `END OF DAY · ${venue ?? "NSE"}`;
+      label = "END OF DAY";
       short = "EOD";
       tone = "eod";
       break;
     case "daily-ref":
-      label = `DAILY REF · ${venue ?? "ECB"}`;
+      label = "DAILY REFERENCE";
       short = "REF";
       tone = "ref";
       break;
     default:
-      label = venue ? `SOURCE · ${venue}` : "LIVE SOURCE";
+      label = "LIVE";
       short = "SRC";
       tone = "delayed";
   }
   const proxy = PROXY_SHORT[inst.symbol] ?? (inst.proxyNote ? "PROXY" : null);
   const asOf = inst.asOf ? ` · price as of ${fmtAsOf(inst.asOf, { date: inst.freshness === "eod" || inst.freshness === "daily-ref" })}` : "";
-  const title = `${label}${asOf}${inst.proxyNote ? `. ${inst.proxyNote}` : ""}`;
+  const title = `${label}${asOf}${proxy ? ". Proxy price: it tracks the asset closely but isn't its exact market rate." : ""}`;
   return { label, short, tone, proxy, title };
 }
 
-/** Full freshness badge, e.g. `DELAYED 15M · CBOE` (+ proxy chip). */
+/** Full freshness badge, e.g. `DELAYED 15 MIN` (+ proxy chip). */
 export function FreshnessBadge({ inst, compact = false, showProxy = true }: { inst: Instrument; compact?: boolean; showProxy?: boolean }) {
   const f = freshness(inst);
   if (!f) return null;
@@ -91,7 +79,7 @@ export function FreshnessBadge({ inst, compact = false, showProxy = true }: { in
         {compact ? f.short : f.label}
       </span>
       {showProxy && f.proxy && !compact && (
-        <span className="fresh fresh--proxy" title={inst.proxyNote ?? f.proxy}>
+        <span className="fresh fresh--proxy" title="Proxy price: it tracks the asset closely but isn't its exact market rate.">
           {f.proxy}
         </span>
       )}
@@ -101,20 +89,18 @@ export function FreshnessBadge({ inst, compact = false, showProxy = true }: { in
 
 /* ---------------- engine v0 tag ---------------- */
 export const ENGINE_EXPLAINER =
-  "Live calls come from engine v0: transparent rules (trend, momentum, order book, options and sentiment checks) on free public data. Its confidence number is a rule-based score that hasn't been calibrated against outcomes yet, so read it as a ranking, not a probability. Every call and its result goes on the public ledger.";
+  "Calls are informational, not investment advice. The confidence score ranks setups against each other; it is not a probability of profit. Every call and its result goes on the public ledger.";
 
-export function EngineTag({ className = "" }: { className?: string }) {
-  return (
-    <span className={`engine-tag ${className}`} tabIndex={0} role="note" aria-label={`Engine v0, uncalibrated. ${ENGINE_EXPLAINER}`} data-tip={ENGINE_EXPLAINER}>
-      ENGINE V0 · UNCALIBRATED
-    </span>
-  );
+/** Was the "ENGINE V0 · UNCALIBRATED" chip. Internals aren't shown to end users; the plain-language
+ *  disclaimer (ENGINE_EXPLAINER / LIVE_DISCLAIMER) covers what they need to know. */
+export function EngineTag(_props: { className?: string }) {
+  return null;
 }
 
 /* ---------------- disclaimer ---------------- */
 export const BETA_DISCLAIMER = "Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss.";
 export const LIVE_DISCLAIMER =
-  "Live beta on free data: crypto real-time, US delayed 15 minutes, India end of day, FX daily reference rates. Signals come from engine v0 (rule-based, uncalibrated) and are probabilities, not promises.";
+  "Calls are informational, not investment advice, and any call can lose money. Each price shows whether it is real-time or delayed.";
 
 export function Disclaimer({ className = "" }: { className?: string }) {
   return <p className={`disclaimer ${className}`}>{LIVE_DISCLAIMER}</p>;
@@ -218,12 +204,10 @@ export function NAState({ title, reason, children }: { title: string; reason?: s
 
 /** `source · as of hh:mm` footnote every live widget carries. */
 export function SourceLine({ source, asOf, extra }: { source?: string | null; asOf?: string | null; extra?: string }) {
-  if (!source && !asOf) return null;
-  const s = source ? (VENUE[source] ?? source).toString() : null;
+  void source; // data vendors aren't shown to end users; only how fresh the data is
+  if (!asOf && !extra) return null;
   return (
     <p className="src-line mono">
-      {s && <span>{s.toLowerCase() === s ? s : s}</span>}
-      {s && asOf && " · "}
       {asOf && <span>as of {fmtAsOf(asOf)}</span>}
       {extra && <span> · {extra}</span>}
     </p>
@@ -244,13 +228,13 @@ export function LegalLinks() {
 /* ---------------- engine v0 sit-out reasons ---------------- */
 const SIT_OUT_LABEL: Record<string, string> = {
   no_trend: "No clear trend",
-  momentum_conflict: "Momentum conflicts",
-  insufficient_agreement: "Too few layers agree",
-  stale_data: "Data is stale",
+  momentum_conflict: "Mixed signals",
+  insufficient_agreement: "No clear setup",
+  stale_data: "Data delayed",
   insufficient_history: "Not enough history",
-  event_risk: "Event risk",
-  strategy_disabled: "Strategy paused",
-  cooldown: "Cooling down after a close",
+  event_risk: "Event risk ahead",
+  strategy_disabled: "Paused",
+  cooldown: "Waiting after last call",
   no_data: "No data yet",
   under_review: "New call under review",
   closed: "Last call just closed",

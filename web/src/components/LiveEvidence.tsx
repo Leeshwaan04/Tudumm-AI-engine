@@ -27,7 +27,7 @@ export function LiveLayer({ inst, layer }: { inst: Instrument; layer: LayerId })
       ) : (
         <div className="ev-engine">
           <p className="eyebrow">Engine v0 reading</p>
-          <p className="ev-engine__txt">{detail ?? "Scored by engine v0; no explanation was stored for this layer."}</p>
+          <p className="ev-engine__txt">{detail ?? "No explanation is available for this layer."}</p>
           {note && <p className="ev__fine">{note}</p>}
         </div>
       )}
@@ -135,7 +135,7 @@ function FlowLive({ inst }: { inst: Instrument }) {
   return (
     <div className="ev__cols">
       <Block
-        title={`Order book · top ${rows} levels · ${d.venue ?? "Binance"}${inst.symbol === "XAUUSD" ? " · PAXG proxy" : ""}`}
+        title={`Order book · top ${rows} levels${inst.symbol === "XAUUSD" ? " · proxy" : ""}`}
         foot={<SourceLine source={d.source ?? "binance"} asOf={d.asOf} extra="refreshes every 15 s" />}
       >
         <div className="scroll-x">
@@ -203,7 +203,7 @@ function FlowLive({ inst }: { inst: Instrument }) {
             <dd>{n(d.bidAskRatio) !== null ? `${(d.bidAskRatio as number).toFixed(2)}×` : "—"}</dd>
           </div>
         </dl>
-        <p className="ev__fine">Imbalance = (bid − ask) / (bid + ask) quantity within ±1% of mid. A thin book can flip in seconds; engine v0 also weighs taker-buy share and volume.</p>
+        <p className="ev__fine">A thin order book can flip in seconds.</p>
       </Block>
     </div>
   );
@@ -411,7 +411,7 @@ function PerpLive({ inst, d }: { inst: Instrument; d: DerivativesRes }) {
             <dd className={(n(oi?.change24hPct) ?? 0) >= 0 ? "c-long" : "c-short"}>{n(oi?.change24hPct) !== null ? `${signed(oi?.change24hPct as number)}%` : "—"}</dd>
           </div>
         </dl>
-        {f?.nextFundingTime && <p className="ev__fine">Next funding {fmtAsOf(f.nextFundingTime, { date: true })}. Positive funding means longs pay shorts; engine v0 reads crowded funding as a contrarian signal.</p>}
+        {f?.nextFundingTime && <p className="ev__fine">Next funding {fmtAsOf(f.nextFundingTime, { date: true })}. Positive funding means longs pay shorts.</p>}
         {d.notes?.length ? <p className="ev__fine">{d.notes.join(" ")}</p> : null}
       </Block>
       {d.buildUp && <BuildUp bu={d.buildUp} />}

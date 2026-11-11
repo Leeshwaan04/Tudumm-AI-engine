@@ -30,6 +30,8 @@ jobs:
         run: npm run test:market
       - name: Kite broker guardrails, vault, routes and relay
         run: npm run test:broker
+      - name: Feed watchdog + stale-data order guard
+        run: node --test worker/test/watchdog.test.ts
       - name: Live feed (5paisa/TOTP/ticks)
         run: npm run test:live
       - name: Extension

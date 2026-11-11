@@ -239,7 +239,7 @@ function liveMeta() {
   const p = data.payload;
   const at = p && p.fetchedAt ? new Date(p.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
   const ticks =
-    tickStatus === "live" ? "streaming from Binance" : tickStatus === "retrying" ? "Binance stream reconnecting" : tickStatus === "paused" ? "Binance stream paused while hidden" : tickStatus === "connecting" ? "connecting to Binance" : null;
+    tickStatus === "live" ? "streaming live" : tickStatus === "retrying" ? "live stream reconnecting" : tickStatus === "paused" ? "live stream paused while hidden" : tickStatus === "connecting" ? "connecting to the live stream" : null;
   return h(
     "p",
     { class: "feed-meta mono", id: "feed-meta" },

@@ -81,7 +81,7 @@ export default function Support() {
             </header>
             <div className="panel__body sup__faq">
               <p>
-                <b>Is a signal advice?</b> No. Engine v0 is rule-based and uncalibrated; read the{" "}
+                <b>Is a signal advice?</b> No. Calls are informational and not investment advice; read the{" "}
                 <Link className="u-link" to="/risk">
                   risk disclosure
                 </Link>

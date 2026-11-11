@@ -6,9 +6,9 @@ import { isTrade } from "../engine/types";
 import { rAt } from "../engine/universe";
 import { fmtAgo, fmtR, fmtSignedPct } from "../engine/format";
 import { issuedAtMs, useLiveStatus, useNow, useTick } from "../engine/live";
-import { EngineTag, FreshnessBadge, sitOutLabel } from "./badges";
+import { FreshnessBadge, sitOutLabel } from "./badges";
 import { trackingStore, toggleIn, useStore } from "../engine/profile";
-import { ConfluenceMeter, DirectionPill, LevelsRow, LivePrice, StatusPill, TradeMap, distanceToZone } from "./signal";
+import { DirectionPill, LevelsRow, LivePrice, StatusPill, TradeMap, distanceToZone } from "./signal";
 import { useCountUp, useReducedMotion } from "./hooks";
 
 const REGIME_LABEL: Record<string, string> = {
@@ -108,9 +108,11 @@ function CardHeader({ inst, href }: { inst: Instrument; href: string | null }) {
           symbol
         )}
         <span className="sc__name">{inst.name}</span>
-        <span className="chip chip--hash sc__id" title="Ledger id: this call is hashed into the public ledger" data-anchor="ledger">
-          #{s.id}
-        </span>
+        {isTrade(s) && (
+          <span className="chip chip--hash sc__id" title="Ledger id: this call is recorded on the public ledger" data-anchor="ledger">
+            #{s.id}
+          </span>
+        )}
       </div>
       <div className="sc__meta">
         <span className="chip">{inst.exchange}</span>
@@ -170,25 +172,13 @@ function TradeBody({
       </div>
       <TradeMap inst={inst} signal={s} status={status} />
       <LevelsRow inst={inst} s={s} />
-      <ConfluenceMeter layers={s.layers} />
-      <div className="sc__why">
-        <p className="sc__thesis" data-anchor="why">
-          {s.thesis}
+      {s.invalidation && (
+        <p className="sc__inv" data-anchor="invalidation">
+          <span>Invalidated if:</span> {s.invalidation}
         </p>
-        {s.invalidation && (
-          <p className="sc__inv" data-anchor="invalidation">
-            <span>Invalidated if:</span> {s.invalidation}
-          </p>
-        )}
-      </div>
-      {s.live && (
-        <div className="sc__engine">
-          <EngineTag />
-        </div>
       )}
       {trackable && (
         <footer className="sc__foot">
-          <span className="sc__strategy">{s.strategy}</span>
           <button
             type="button"
             className={`sc__track ${tracked ? "is-on" : ""}`}
@@ -217,14 +207,7 @@ function SitOutBody({ inst }: { inst: Instrument }) {
         <LivePrice inst={inst} showChange />
         <span className="chip">{s.live ? (sitOutLabel(s.sitOutReason) ?? regimeLabel(s.regime)) : regimeLabel(s.regime)}</span>
       </div>
-      <p className="sc__thesis sc__thesis--sit">{s.thesis}</p>
-      <ConfluenceMeter layers={s.layers} tone="sitout" />
-      <p className="sc__inv">
-        <span>No levels.</span>{" "}
-        {s.live
-          ? "Engine v0 re-checks on every completed bar and issues a call only when at least three layers agree."
-          : "Tudumm re-checks every bar and will issue a call only when the layers line up."}
-      </p>
+      <p className="sc__inv t3">No call right now. A new call appears here when a setup forms.</p>
     </>
   );
 }
