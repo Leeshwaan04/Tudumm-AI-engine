@@ -1,7 +1,9 @@
 /* Tudumm content script (classic, self-contained).
  *
- * - Sends the page URL + title to the background, which owns the seed and does
- *   the alias resolution (the content script never fetches extension files).
+ * - Sends the page URL + title to the background, which owns the live market
+ *   data and does the alias resolution (the content script never fetches
+ *   extension files). When the background has no live data it answers
+ *   `offline: true` and the chip says so (and retries) instead of showing numbers.
  * - Renders a floating chip inside a CLOSED Shadow DOM, styled in isolation with
  *   system font stacks (no fonts are loaded into host pages).
  * - Re-detects on SPA navigation by polling location.href (and title) every 1s.
@@ -17,7 +19,7 @@
   "use strict";
 
   var SVG_NS = "http://www.w3.org/2000/svg";
-  var DEFAULTS = { webUrl: "http://localhost:5180", chipEnabled: true, sites: {} };
+  var DEFAULTS = { webUrl: "https://tudumm.in", chipEnabled: true, sites: {} };
 
   var CSS = [
     ":host{all:initial}",
@@ -34,7 +36,7 @@
     ".chip .sym{font-family:var(--mono);font-weight:700;font-size:12.5px;letter-spacing:.02em}",
     ".chip .sep{width:1px;height:16px;background:var(--line-strong)}",
     ".v{font-family:var(--mono);font-weight:700;font-size:12px;letter-spacing:.03em}",
-    ".v.long{color:var(--long)}.v.short{color:var(--short)}.v.sit{color:var(--neutral);font-weight:600;letter-spacing:.08em;font-size:11px}.v.nc{color:var(--text-2);font-family:var(--sans);font-weight:500;letter-spacing:0}.v.q{color:var(--brand)}",
+    ".v.long{color:var(--long)}.v.short{color:var(--short)}.v.sit{color:var(--neutral);font-weight:600;letter-spacing:.08em;font-size:11px}.v.nc{color:var(--text-2);font-family:var(--sans);font-weight:500;letter-spacing:0}.v.off{color:var(--brand);font-family:var(--sans);font-weight:500;letter-spacing:0}",
     ".v .conf{color:var(--brand);margin-left:5px}",
     /* mark */
     ".mark circle{fill:var(--brand);transform-box:fill-box;transform-origin:center}",
@@ -56,7 +58,7 @@
     ".cfl{font-size:10px;color:var(--text-3);display:block;margin-top:2px;letter-spacing:.02em}",
     ".st{margin-left:auto;display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:4px;border:1px solid var(--line-strong);font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.08em;color:var(--text-2);white-space:nowrap}",
     ".st i{width:5px;height:5px;border-radius:50%;background:currentColor}",
-    ".st.active{color:var(--info);border-color:rgba(127,167,255,.35)}.st.pending{color:var(--neutral)}.st.t1_hit{color:var(--long);border-color:rgba(61,214,140,.35);background:var(--long-dim)}.st.sit_out{color:var(--neutral);background:var(--neutral-dim)}.st.queued{color:var(--brand);border-color:rgba(245,184,65,.4);background:var(--brand-dim)}",
+    ".st.active{color:var(--info);border-color:rgba(127,167,255,.35)}.st.pending{color:var(--neutral)}.st.t1_hit{color:var(--long);border-color:rgba(61,214,140,.35);background:var(--long-dim)}.st.sit_out{color:var(--neutral);background:var(--neutral-dim)}",
     ".lv{display:flex;align-items:baseline;gap:8px;font-size:11.5px;color:var(--text-2);flex-wrap:wrap}",
     ".lv .p{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--text);font-size:13px;font-weight:500;padding:0 3px;margin-left:-3px;border-radius:3px}",
     ".lv .r{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:11.5px;padding:1px 5px;border-radius:4px}",
@@ -91,7 +93,6 @@
     ".why{margin:0;font-family:var(--serif);font-style:italic;font-size:14.5px;line-height:1.3;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
     ".sit-t{margin:0;font-family:var(--serif);font-size:24px;line-height:1;font-weight:400}",
     ".note{margin:0;font-size:11.5px;color:var(--text-2);line-height:1.45}",
-    ".qt{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:24px;color:var(--brand);line-height:1}",
     ".acts{display:grid;grid-template-columns:1fr 1fr;gap:6px}",
     ".btn{appearance:none;height:32px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface-2);color:var(--text);font-size:12px;font-weight:500;padding:0 8px;white-space:nowrap}",
     ".btn:hover{background:var(--surface-3)}",
@@ -99,6 +100,8 @@
     ".hint{margin:0;font-size:11.5px;color:var(--brand);background:var(--brand-dim);border:1px solid rgba(245,184,65,.3);border-radius:6px;padding:7px 9px;line-height:1.4}",
     ".ft{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--text-3)}",
     ".ft b{color:var(--brand);font-weight:600;border:1px solid rgba(245,184,65,.32);background:var(--brand-dim);border-radius:3px;padding:1px 4px}",
+    ".ft{flex-wrap:wrap;row-gap:4px}.ft b.lv2{color:var(--long);border-color:rgba(61,214,140,.32);background:var(--long-dim)}.ft b.lv2.stale{color:var(--brand);border-color:rgba(245,184,65,.32);background:var(--brand-dim)}",
+    ".ft .eng{color:var(--text-2);border:1px dashed var(--line-strong);border-radius:3px;padding:0 4px;cursor:help}.ft .px{color:var(--info)}",
     ".gone{display:inline-flex;align-items:center;gap:10px;height:34px;padding:0 6px 0 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line-strong);color:var(--text-2);font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.35)}",
     ".gone button{appearance:none;border:0;background:transparent;color:var(--brand);font-weight:600;font-size:12px;padding:6px}",
     ".flash-up{animation:fu .3s ease-out}.flash-down{animation:fd .3s ease-out}",
@@ -178,15 +181,31 @@
     var state = {
       det: null, snap: null, expanded: false, hiddenNotice: false,
       settings: { chipEnabled: true, sites: {} }, hint: null, lastTick: null,
+      offline: null, // { site, siteLabel, reasonText, retryInMs } while the background has no live data
     };
     var pollTimer = null;
+    var retryTimer = null;
+    var lastArgs = null;
     var dead = false;
 
     function siteOn() {
       var s = state.settings;
       if (!s.chipEnabled) return false;
-      if (state.det && state.det.site && s.sites && s.sites[state.det.site] === false) return false;
+      var site = state.det ? state.det.site : state.offline ? state.offline.site : null;
+      if (site && s.sites && s.sites[site] === false) return false;
       return true;
+    }
+
+    /** No live data: a compact chip that says so (click retries now). Never numbers. */
+    function offlineChip() {
+      var b = el("button", "chip");
+      b.type = "button";
+      var why = state.offline.reasonText || "Tudumm can't be reached.";
+      b.title = "Live data temporarily unavailable — retrying. " + why + " Click to retry now.";
+      b.setAttribute("aria-label", "Tudumm: live data temporarily unavailable, retrying. " + why + " Retry now.");
+      add(b, mark(18), el("span", "sym", "Tudumm"), el("span", "sep"), el("span", "v off", "Live data unavailable · retrying"));
+      b.addEventListener("click", function () { if (lastArgs) detect(lastArgs.url, lastArgs.title); });
+      return b;
     }
 
     function render(beat) {
@@ -202,6 +221,11 @@
           env.setSiteEnabled(state.det.site, true);
         });
         add(root, add(g, undo));
+        return;
+      }
+      if (state.offline) {
+        host.style.display = siteOn() ? "block" : "none";
+        if (siteOn()) add(root, offlineChip());
         return;
       }
       if (!state.det || !(state.det.symbol || state.det.ticker) || !siteOn()) {
@@ -220,7 +244,6 @@
     function verdict() {
       var s = state.snap;
       if (!s) return el("span", "v nc", "Not covered yet");
-      if (s.status === "queued") return el("span", "v q", "REVEALING… " + str(s.countdown, 8));
       if (s.status === "sit_out") return el("span", "v sit", "SITTING OUT");
       var long = s.direction === "LONG";
       var v = el("span", "v " + (long ? "long" : "short"), (long ? "▲ " : "▼ ") + str(s.direction, 5));
@@ -234,7 +257,7 @@
       b.setAttribute("aria-expanded", state.expanded ? "true" : "false");
       var sym = state.snap ? state.snap.symbol : state.det.ticker;
       b.setAttribute("aria-label", "Tudumm: " + str(sym, 24) + ". " + (state.expanded ? "Collapse" : "Show signal"));
-      add(b, mark(18, state.snap && state.snap.status === "queued"), el("span", "sym", str(sym, 24)), el("span", "sep"), verdict());
+      add(b, mark(18), el("span", "sym", str(sym, 24)), el("span", "sep"), verdict());
       b.addEventListener("click", function () {
         state.expanded = !state.expanded;
         state.hint = null;
@@ -295,7 +318,7 @@
       var s = state.snap;
       var c = el("div", "card");
       var hd = el("div", "hd");
-      add(hd, mark(18, s && s.status === "queued"), el("span", "sym", str(s ? s.symbol : state.det.ticker, 24)), el("span", "nm", s ? str(s.name, 60) : "on " + str(state.det.siteLabel, 40)));
+      add(hd, mark(18), el("span", "sym", str(s ? s.symbol : state.det.ticker, 24)), el("span", "nm", s ? str(s.name, 60) : "on " + str(state.det.siteLabel, 40)));
       var min = el("button", "ib", "–"); min.type = "button"; min.title = "Collapse"; min.setAttribute("aria-label", "Collapse");
       min.addEventListener("click", function () { state.expanded = false; render(false); schedule(); });
       var x = el("button", "ib", "×"); x.type = "button";
@@ -313,18 +336,8 @@
 
       if (!s) {
         add(c,
-          el("p", "note", "Tudumm doesn't cover " + str(state.det.ticker, 24) + " yet. This prototype covers 22 instruments across India, the US, Europe, crypto, FX and commodities."),
+          el("p", "note", "Tudumm doesn't cover " + str(state.det.ticker, 24) + " yet. Tudumm covers 22 instruments across India, the US, Europe, crypto, FX and commodities."),
           actions(null));
-        return add(c, footer());
-      }
-
-      if (s.status === "queued") {
-        var q = el("div", "vd");
-        var qwrap = el("div");
-        add(qwrap, el("span", "cfl", "Next reveal in"), el("span", "qt", str(s.countdown, 8)));
-        var st = el("span", "st queued"); add(st, el("i"), document.createTextNode("REVEALING…"));
-        add(q, qwrap, st);
-        add(c, q, el("p", "note", "Five layers are being read together. The verdict lands on the beat."), actions(s.symbol));
         return add(c, footer());
       }
 
@@ -369,7 +382,7 @@
       var op = el("button", "btn pri", "Open in Tudumm ↗"); op.type = "button";
       op.addEventListener("click", function () {
         env.send({ type: "openTerminal", symbol: symbol || null }).then(function (res) {
-          if (res && res.ok === false && res.error === "invalid-web-url") { state.hint = "Set a valid http(s) web app URL in Tudumm Options first."; render(false); }
+          if (res && res.ok === false && res.error === "invalid-web-url") { state.hint = "Set a valid https web app URL in Tudumm Options first."; render(false); }
         }, function () {});
       });
       add(a, sp, op);
@@ -380,7 +393,20 @@
 
     function footer() {
       var f = el("div", "ft");
-      add(f, el("b", null, "DEMO DATA"), el("span", null, "Simulated · not investment advice"));
+      var s = state.snap;
+      if (s) {
+        // Say where the price comes from and how fresh it is, and that engine v0 is uncalibrated.
+        var fresh = el("b", "lv2" + (s.stale ? " stale" : ""), str(s.freshnessText || "LIVE", 40));
+        if (s.freshnessHelp) fresh.title = str(s.freshnessHelp, 400);
+        var when = el("span", "when", s.hasPrice ? str(s.asOfText || "", 24) + (s.stale ? " · stale" : "") : "no price yet");
+        add(f, fresh, when);
+        if (s.proxyText) f.appendChild(el("span", "px", str(s.proxyText, 40)));
+        var eng = el("span", "eng", "ENGINE V0 · UNCALIBRATED");
+        eng.title = "Live signals come from engine v0: fixed rules whose confidence isn't calibrated against outcomes yet. Read it as a ranking.";
+        add(f, eng, el("span", null, "Beta · not investment advice"));
+        return f;
+      }
+      add(f, el("span", null, "Beta · not investment advice"));
       return f;
     }
 
@@ -389,15 +415,12 @@
       var prev = state.snap;
       state.snap = snap;
       if (!prev || !snap || prev.status !== snap.status || prev.symbol !== snap.symbol) {
-        render(!!prev && !!snap && prev.status === "queued" && snap.status !== "queued");
-        return;
-      }
-      if (snap.status === "queued") {
-        var qts = root.querySelectorAll(".qt, .v.q");
-        for (var i = 0; i < qts.length; i++) qts[i].textContent = qts[i].classList.contains("qt") ? str(snap.countdown, 8) : "REVEALING… " + str(snap.countdown, 8);
+        render(false);
         return;
       }
       if (!state.expanded) return;
+      var w = root.querySelector(".ft .when");
+      if (w && snap.live) w.textContent = snap.hasPrice ? str(snap.asOfText || "", 24) + (snap.stale ? " · stale" : "") : "no price yet";
       var p = root.querySelector(".lv .p");
       if (p && p.textContent !== snap.priceText) {
         p.textContent = str(snap.priceText, 30);
@@ -417,23 +440,40 @@
       clearInterval(pollTimer);
       pollTimer = null;
       if (!state.snap || dead) return;
-      var needs = state.expanded || state.snap.status === "queued";
-      if (!needs) return;
+      if (!state.expanded) return;
       pollTimer = setInterval(function () {
         if (document.visibilityState === "hidden" || !state.snap) return;
         env.send({ type: "snapshot", symbol: state.snap.symbol, loadedAt: loadedAt }).then(function (res) {
-          if (res && res.ok && res.snapshot) { liveUpdate(res.snapshot); if (res.snapshot.status !== "queued" && !state.expanded) schedule(); }
+          if (res && res.ok && res.snapshot) { liveUpdate(res.snapshot); if (!state.expanded) schedule(); }
+          else if (res && res.offline && lastArgs) detect(lastArgs.url, lastArgs.title);
         }, function () {});
       }, 1000);
     }
 
     function detect(url, title) {
+      lastArgs = { url: url, title: title };
       return env.send({ type: "detect", url: str(url, 2048), title: str(title, 300), loadedAt: loadedAt }).then(function (res) {
         if (dead || !res || !res.ok) return;
+        clearTimeout(retryTimer);
+        retryTimer = null;
+        if (res.offline) {
+          // No live data in the background: say so on this supported site, and try again later.
+          state.offline = { site: str(res.site, 24) || null, siteLabel: str(res.siteLabel, 40), reasonText: str(res.reasonText, 200), retryInMs: Number(res.retryInMs) || 15000 };
+          state.det = null;
+          state.snap = null;
+          state.expanded = false;
+          clearInterval(pollTimer);
+          pollTimer = null;
+          render(false);
+          retryTimer = setTimeout(function () { if (lastArgs && !dead) detect(lastArgs.url, lastArgs.title); }, Math.max(5000, Math.min(state.offline.retryInMs, 60000)));
+          return;
+        }
+        var wasOffline = !!state.offline;
+        state.offline = null;
         var prevSym = state.det ? state.det.symbol + "|" + state.det.ticker : "";
         state.det = res.detection && res.detection.site ? res.detection : null;
         var nextSym = state.det ? state.det.symbol + "|" + state.det.ticker : "";
-        if (prevSym === nextSym && state.snap && res.snapshot) {
+        if (!wasOffline && prevSym === nextSym && state.snap && res.snapshot) {
           liveUpdate(res.snapshot);
           return;
         }
@@ -458,6 +498,7 @@
       destroy: function () {
         dead = true;
         clearInterval(pollTimer);
+        clearTimeout(retryTimer);
         if (host.parentNode) host.parentNode.removeChild(host);
       },
     };

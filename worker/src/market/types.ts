@@ -57,7 +57,7 @@ export interface StrategyRow {
 export type MarketId = "IN" | "US" | "EU" | "CRYPTO" | "FX" | "CMDTY";
 export type AssetClass = "index" | "equity" | "etf" | "crypto" | "fx" | "commodity";
 export type Currency = "INR" | "USD" | "EUR" | "JPY" | "USDT";
-export type SourceId = "binance" | "binance-futures" | "bybit" | "alternative-me" | "cboe" | "sec-edgar" | "nse-archives" | "ecb-frankfurter";
+export type SourceId = "binance" | "binance-futures" | "bybit" | "alternative-me" | "cboe" | "sec-edgar" | "nse-archives" | "ecb-frankfurter" | "5paisa";
 export type DerivKind = "option_chain" | "perp" | "futures" | "none";
 export type CandleTf = "15m" | "1H" | "4H" | "1D" | "1W";
 export type Outcome = "target" | "trailed" | "stopped" | "expired" | "invalidated";

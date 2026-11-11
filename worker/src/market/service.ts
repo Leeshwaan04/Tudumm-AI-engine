@@ -89,6 +89,9 @@ export interface SignalRow {
   exit_price: number | null;
   r: number | null;
   hold_reason: string | null;
+  forming_t?: number | null;
+  forming_hi?: number | null;
+  forming_lo?: number | null;
   source: string;
   freshness: string;
   updated_at: string;
@@ -118,6 +121,9 @@ export function toLifecycle(r: SignalRow): LifecycleSignal {
     outcome: (r.outcome as LifecycleSignal["outcome"]) ?? null,
     exit: r.exit_price,
     r: r.r,
+    formingT: r.forming_t ?? null,
+    formingHigh: r.forming_hi ?? null,
+    formingLow: r.forming_lo ?? null,
   };
 }
 
@@ -191,12 +197,15 @@ export async function queueLedger(p: Pending, r: Pick<SignalRow, "id" | "symbol"
 
 export function lifecycleUpdateStmt(id: string, s: LifecycleSignal, now: string, closeReason: string | null = null): SqlStmt {
   return stmt(
-    `UPDATE live_signals SET status = ?, stop_current = ?, bars_elapsed = ?, checked_through_t = ?, activated_at = ?, t1_at = ?, closed_at = ?, closed_bar_t = ?,
+    `UPDATE live_signals SET status = ?, stop_current = ?, bars_elapsed = ?, checked_through_t = ?, forming_t = ?, forming_hi = ?, forming_lo = ?, activated_at = ?, t1_at = ?, closed_at = ?, closed_bar_t = ?,
        outcome = ?, exit_price = ?, r = ?, close_reason = COALESCE(?, close_reason), updated_at = ? WHERE id = ?`,
     s.status,
     s.stopCurrent,
     s.barsElapsed,
     s.checkedThroughT,
+    s.formingT ?? null,
+    s.formingHigh ?? null,
+    s.formingLow ?? null,
     s.activatedAt,
     s.t1At,
     s.closedAt,
@@ -338,8 +347,14 @@ export async function runCycle(db: MarketDb, input: CycleInput): Promise<CycleRe
     const i = BY_SYMBOL.get(row.symbol);
     if (!i) continue;
     const bars = (data.bars.get(row.symbol) ?? []).filter((b) => b.t > row.issued_bar_t);
-    const { signal: next, transitions } = stepLifecycle(toLifecycle(row), bars, priceOf(i), nowSec);
-    const changed = transitions.length > 0 || next.barsElapsed !== row.bars_elapsed || next.checkedThroughT !== row.checked_through_t;
+    const { signal: next, transitions } = stepLifecycle(toLifecycle(row), bars, priceOf(i), nowSec, i.closeOffsetSec);
+    const changed =
+      transitions.length > 0 ||
+      next.barsElapsed !== row.bars_elapsed ||
+      next.checkedThroughT !== row.checked_through_t ||
+      (next.formingT ?? null) !== (row.forming_t ?? null) ||
+      (next.formingHigh ?? null) !== (row.forming_hi ?? null) ||
+      (next.formingLow ?? null) !== (row.forming_lo ?? null);
     if (changed) p.stmts.push(lifecycleUpdateStmt(row.id, next, nowIso));
     await applyTransitions(p, row, transitions, next);
     for (const t of transitions) out.transitions.push({ symbol: row.symbol, type: t.type, outcome: t.outcome });

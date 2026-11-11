@@ -1,5 +1,7 @@
 // Popup: "On this page" SignalCard, alias search, top live signals, detail view.
-import { loadSeed, createEngine } from "./lib/engine.js";
+// Data: the live universe (with Binance ticks for crypto + the PAXG gold proxy)
+// from lib/live.js; when it can't load, an explicit offline state with a retry.
+import { createDataSession } from "./lib/live.js";
 import * as P from "./lib/platform.js";
 import * as UI from "./lib/ui.js";
 
@@ -9,6 +11,7 @@ const $view = document.getElementById("view");
 const $foot = document.getElementById("foot");
 
 const live = UI.createLive();
+let data = null;
 let engine = null;
 let page = null;
 let detection = null;
@@ -18,14 +21,14 @@ let unsubscribe = null;
 let showAll = false;
 let query = "";
 let detailSymbol = null;
-let lastLiveKey = "";
+let booted = false;
 
 // ------------------------------------------------------------------ chrome --
 
 function renderBar() {
   $bar.replaceChildren(
     UI.wordmark(),
-    UI.demoBadge(),
+    UI.dataBadge(),
     h("span", { class: "bar-spacer" }),
     h("button", { type: "button", class: "icon-btn", title: "Options", "aria-label": "Open options", onclick: () => P.openOptions() }, UI.iconGear()),
   );
@@ -53,9 +56,9 @@ function renderFoot() {
 // --------------------------------------------------------------- detection --
 
 function detectFor(p) {
-  if (!p) return null;
-  if (p.symbol && engine.get(p.symbol)) return { site: "preview", siteLabel: "Simulated page", symbol: p.symbol, ticker: p.symbol, via: "preview" };
-  if (p.symbol) return { site: "preview", siteLabel: "Simulated page", symbol: null, ticker: p.symbol, via: "preview" };
+  if (!p || !engine) return null;
+  if (p.symbol && engine.get(p.symbol)) return { site: "preview", siteLabel: "Preview page", symbol: p.symbol, ticker: p.symbol, via: "preview" };
+  if (p.symbol) return { site: "preview", siteLabel: "Preview page", symbol: null, ticker: p.symbol, via: "preview" };
   const d = p.url ? engine.detect(p.url, p.title) : null;
   if (d && d.site) return d;
   if (p.stored && p.stored.site) return p.stored;
@@ -77,7 +80,6 @@ function mount(list) {
   if (unsubscribe) unsubscribe();
   unsubscribe = live.subscribe((now) => {
     for (const c of components) c.update(now);
-    checkLiveSet(now);
   });
 }
 
@@ -86,28 +88,6 @@ function liveSymbols(now = Date.now()) {
     .filter((i) => ["active", "pending", "t1_hit"].includes(engine.signalState(i.symbol, now).status))
     .sort((a, b) => b.signal.confidence - a.signal.confidence || a.symbol.localeCompare(b.symbol))
     .map((i) => i.symbol);
-}
-
-function queuedSymbols(now = Date.now()) {
-  return engine.instruments
-    .filter((i) => engine.signalState(i.symbol, now).status === "queued")
-    .sort((a, b) => a.signal.revealAfterSec - b.signal.revealAfterSec)
-    .map((i) => i.symbol);
-}
-
-function checkLiveSet(now) {
-  if (detailSymbol || query) return;
-  const key = liveSymbols(now).join(",") + "|" + queuedSymbols(now).join(",");
-  if (key === lastLiveKey) return;
-  const prev = lastLiveKey;
-  lastLiveKey = key;
-  if (!prev) return;
-  const revealed = prev.split("|")[1].split(",").filter((s) => s && !key.split("|")[1].split(",").includes(s));
-  renderHome({ keepScroll: true, revealed });
-  for (const s of revealed) {
-    const snap = engine.snapshot(s, now);
-    P.toast(`${s} revealed: ${snap.direction === "LONG" ? "▲" : "▼"} ${snap.direction} ${snap.confidencePct}% · ${snap.statusText}`, { tone: "ok" });
-  }
 }
 
 function openDetail(symbol) {
@@ -125,10 +105,11 @@ function backHome() {
 function starFor(symbol) {
   return () =>
     UI.starButton(watch.includes(symbol), async () => {
-      const on = await P.toggleWatch(symbol);
+      const res = await P.toggleWatch(symbol);
       watch = await P.getWatchlist();
-      P.toast(on ? `${symbol} added to your watchlist` : `${symbol} removed from your watchlist`);
-      return on;
+      if (res.error) P.toast(res.error, { tone: "warn", timeout: 5000 });
+      else P.toast(`${symbol} ${res.on ? "added to" : "removed from"} your watchlist${res.synced ? " · synced" : ""}`);
+      return res.on;
     });
 }
 
@@ -139,7 +120,7 @@ function hereSection(list, animate) {
     { class: "section-head" },
     h("span", { class: "eyebrow" }, "On this page"),
     d && d.site
-      ? h("span", { class: "here-src" }, h("b", {}, d.site === "preview" ? "simulated page" : hostOf(page.url) || d.siteLabel), d.via ? `via ${d.via === "preview" ? "?symbol=" : d.via}` : "")
+      ? h("span", { class: "here-src" }, h("b", {}, d.site === "preview" ? "preview page" : hostOf(page.url) || d.siteLabel), d.via ? `via ${d.via === "preview" ? "?symbol=" : d.via}` : "")
       : null,
   );
   if (d && d.symbol) {
@@ -155,7 +136,7 @@ function hereSection(list, animate) {
       head,
       UI.emptyState({
         title: `${d.ticker} isn't covered yet`,
-        body: `Tudumm's prototype covers ${engine.instruments.length} instruments across India, the US, Europe, crypto, FX and commodities. Search below to see what is.`,
+        body: `Tudumm covers ${engine.instruments.length} instruments across India, the US, Europe, crypto, FX and commodities. Search below to see what is.`,
         actions: [UI.button("Search covered instruments", { small: true, onClick: () => focusSearch() })],
       }),
     );
@@ -231,27 +212,6 @@ function searchSection() {
   return h("section", { class: "search-wrap" }, h("div", { class: "search" }, UI.iconSearch(), input, clear), h("p", { class: "search-hint" }, "Try ", tryBtn("RELIANCE.NS"), " ", tryBtn("BTC-USD"), " ", tryBtn("^NSEI"), " or ", tryBtn("gold"), "."));
 }
 
-function revealStrip(list) {
-  const q = queuedSymbols();
-  if (!q.length) return null;
-  const sym = q[0];
-  const time = h("span", { class: "rs-time" }, engine.snapshot(sym).countdown);
-  const el = h(
-    "button",
-    { type: "button", class: "reveal-strip", "aria-label": `Next reveal: ${sym}. Open details.`, onclick: () => openDetail(sym) },
-    UI.logoMark({ size: 26, drum: true }),
-    h("span", { class: "rs-text" }, h("span", { class: "eyebrow" }, "Next reveal in"), time),
-    h("span", { class: "rs-sym" }, h("b", {}, sym), ` · ${engine.get(sym).name}`),
-  );
-  list.push({
-    update(now) {
-      const s = engine.snapshot(sym, now);
-      if (s.countdown) time.textContent = s.countdown;
-    },
-  });
-  return el;
-}
-
 function topSection(list, revealed = []) {
   const syms = liveSymbols();
   const shown = showAll ? syms : syms.slice(0, 6);
@@ -276,8 +236,10 @@ function topSection(list, revealed = []) {
   return h(
     "section",
     { class: "top", id: "results" },
-    h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, "Top live signals"), h("span", { class: "eyebrow-aux mono" }, `by confidence · ${syms.length} live`)),
-    h("div", { class: `rows${revealed.length ? "" : " stagger"}` }, rows),
+    h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, `Open signals · ${syms.length}`), UI.engineTag({ small: true })),
+    syms.length
+      ? h("div", { class: `rows${revealed.length ? "" : " stagger"}` }, rows)
+      : UI.emptyState({ icon: false, title: "Sitting out everywhere", body: `No open setups right now. Engine v0 checks every instrument after each completed bar and only issues a call when the layers line up. Search above to see each instrument's reason.` }),
     more,
   );
 }
@@ -295,7 +257,7 @@ function resultsSection(list) {
     h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, `Results for “${query}”`), h("span", { class: "eyebrow-aux mono" }, `${res.length} found`)),
     res.length
       ? h("div", { class: "rows" }, rows)
-      : UI.emptyState({ icon: false, title: "No match", body: `Nothing matches “${query}”. Tudumm covers ${engine.instruments.length} instruments in this prototype: try a ticker, a name, or an alias such as RELIANCE.NS or EURUSD=X.` }),
+      : UI.emptyState({ icon: false, title: "No match", body: `Nothing matches “${query}”. Tudumm covers ${engine.instruments.length} instruments: try a ticker, a name, or an alias such as RELIANCE.NS or EURUSD=X.` }),
   );
 }
 
@@ -308,14 +270,20 @@ function renderResults() {
 }
 
 function renderHome({ keepScroll = false, revealed = [], animate = false } = {}) {
+  if (!engine) return renderOffline();
   const scroll = $view.scrollTop;
   const list = [];
-  const kids = [hereSection(list, animate || (detection && revealed.includes(detection.symbol))), searchSection(), revealStrip(list), query ? resultsSection(list) : topSection(list, revealed), UI.disclaimer()];
+  const kids = [hereSection(list, animate || (detection && revealed.includes(detection.symbol))), searchSection(), query ? resultsSection(list) : topSection(list, revealed), UI.disclaimer()];
   $view.replaceChildren(...kids.filter(Boolean));
   if (keepScroll) $view.scrollTop = scroll;
-  lastLiveKey = liveSymbols().join(",") + "|" + queuedSymbols().join(",");
   mount(list);
   renderFoot();
+}
+
+/** No live data: say so (with the API's reason) and retry. Nothing is filled in. */
+function renderOffline() {
+  mount([]);
+  $view.replaceChildren(UI.offlineState({ onRetry: () => data.retry() }), UI.disclaimer());
 }
 
 function renderDetail() {
@@ -359,8 +327,8 @@ function renderDetail() {
 function renderError(err) {
   $view.replaceChildren(
     UI.emptyState({
-      title: "Couldn't load the demo data",
-      body: `The bundled seed file didn't load (${err && err.message ? err.message : "unknown error"}). Reload the extension from chrome://extensions, or retry.`,
+      title: "Couldn't load market data",
+      body: `Live market data didn't load (${err && err.message ? err.message : "unknown error"}). Reload the extension from chrome://extensions, or retry.`,
       actions: [UI.button("Retry", { kind: "primary", small: true, onClick: () => location.reload() })],
     }),
   );
@@ -381,17 +349,55 @@ async function init() {
   document.documentElement.dataset.booted = "1";
   renderBar();
   renderFoot();
+  let ready = () => {};
+  const firstData = new Promise((resolve) => (ready = resolve));
+  data = createDataSession({
+    onSignals: ({ added }) => {
+      engine = data.engine;
+      UI.setData(data.payload);
+      if (detailSymbol && !engine.get(detailSymbol)) detailSymbol = null;
+      if (detailSymbol) renderDetail();
+      else renderHome({ keepScroll: true, revealed: added });
+      for (const s of added) {
+        const snap = engine.snapshot(s);
+        if (snap && snap.direction) P.toast(`New signal: ${s} ${snap.direction === "LONG" ? "▲" : "▼"} ${snap.direction}`, { tone: "ok" });
+      }
+    },
+    onMode: (payload, { modeChanged }) => {
+      engine = data.engine;
+      UI.setData(payload);
+      renderBar();
+      if (!engine) return renderOffline();
+      if (!booted) return ready();
+      if (!modeChanged && !UI.isLive()) return;
+      detection = detectFor(page);
+      if (detailSymbol && engine.get(detailSymbol)) renderDetail();
+      else {
+        detailSymbol = null;
+        renderHome({ keepScroll: true });
+      }
+    },
+  });
   try {
-    const seed = await loadSeed();
-    engine = createEngine(seed);
+    await data.start();
+    engine = data.engine;
+    UI.setData(data.payload);
+    renderBar();
   } catch (err) {
     renderError(err);
     return;
+  }
+  if (!engine) {
+    // Offline: show it, and carry on once live data arrives (lib/live.js retries).
+    renderOffline();
+    await firstData;
+    engine = data.engine;
   }
   [page, watch] = await Promise.all([P.getActivePage(), P.getWatchlist()]);
   detection = detectFor(page);
   if (P.IS_EXTENSION && page && detection && detection.site && detection.site !== "preview") P.rememberTabDetection(page.tabId, { ...detection, url: page.url });
   const focus = P.PARAMS.get("detail");
+  booted = true;
   if (focus && engine.get(focus.toUpperCase())) openDetail(focus.toUpperCase());
   else renderHome({ animate: true });
 

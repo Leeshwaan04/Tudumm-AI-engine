@@ -4,14 +4,16 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 import { regimeLabel } from "../../components/SignalCard";
 import { SessionChip } from "../../components/ui";
 import { useDocumentTitle } from "../../components/hooks";
-import { instruments, instrumentsIn, MARKET_LABEL, MARKET_ORDER, MARKET_SHORT } from "../../engine/seed";
+import { instruments, instrumentsIn, MARKET_LABEL, MARKET_ORDER, MARKET_SHORT } from "../../engine/universe";
 import type { Instrument, LiveStatus } from "../../engine/types";
 import { isTrade } from "../../engine/types";
 import { useAllTicks, useStatuses, type Tick } from "../../engine/live";
 import { MARKET_SESSION } from "../../engine/sessions";
-import { buildUp } from "../../engine/derivatives";
 import { fmtPrice, fmtSignedPct } from "../../engine/format";
 import { marketRegime } from "./Signals";
+import { useDataset } from "../../engine/universe";
+import { useData } from "../../components/DataProvider";
+import { EngineTag, FreshnessBadge, LiveUnavailable } from "../../components/badges";
 
 type View = "heatmap" | "table";
 type SortKey = "symbol" | "market" | "chg" | "conf";
@@ -27,6 +29,8 @@ function heatBg(chg: number): string {
 
 export default function Markets() {
   useDocumentTitle("Markets · Tudumm");
+  useDataset();
+  const data = useData();
   const [view, setView] = useState<View>("heatmap");
   const ticks = useAllTicks();
   const statuses = useStatuses();
@@ -34,10 +38,13 @@ export default function Markets() {
     <div className="mkp">
       <header className="phead">
         <div>
-          <p className="eyebrow">Markets · live demo</p>
+          <p className="eyebrow phead__eyebrow">
+            Markets · live beta <EngineTag />
+          </p>
           <h1 className="phead__title serif">
             {instruments.length} instruments, <em>six markets.</em>
           </h1>
+          <p className="phead__note">Crypto real-time (Binance), US 15-min delayed (Cboe), India end of day (NSE), FX daily reference (ECB). Every price carries its freshness.</p>
         </div>
         <div className="mkp__tools">
           <div className="seg" role="group" aria-label="View">
@@ -55,7 +62,13 @@ export default function Markets() {
           </div>
         </div>
       </header>
-      {view === "heatmap" ? <Heatmap ticks={ticks} statuses={statuses} /> : <MarketTable ticks={ticks} statuses={statuses} />}
+      {data.phase !== "ready" ? (
+        <LiveUnavailable />
+      ) : view === "heatmap" ? (
+        <Heatmap ticks={ticks} statuses={statuses} />
+      ) : (
+        <MarketTable ticks={ticks} statuses={statuses} />
+      )}
     </div>
   );
 }
@@ -63,7 +76,6 @@ export default function Markets() {
 function SignalBadge({ inst, status }: { inst: Instrument; status: LiveStatus }) {
   const s = inst.signal;
   if (status === "sit_out" || !isTrade(s)) return <span className="sbadge sbadge--sit mono">SITTING OUT</span>;
-  if (status === "queued") return <span className="sbadge sbadge--q mono">REVEALING…</span>;
   return (
     <span className={`sbadge mono sbadge--${s.direction === "LONG" ? "long" : "short"}`}>
       {s.direction === "LONG" ? "▲" : "▼"} {s.direction} <b>{Math.round(s.confidence * 100)}%</b>
@@ -72,10 +84,27 @@ function SignalBadge({ inst, status }: { inst: Instrument; status: LiveStatus })
 }
 
 function Heatmap({ ticks, statuses }: { ticks: Record<string, Tick>; statuses: Record<string, LiveStatus> }) {
+  const data = useData();
   return (
     <div className="hmap">
       {MARKET_ORDER.map((m) => {
         const list = instrumentsIn(m);
+        const waiting = data.unavailable.filter((u) => u.market === m);
+        if (!list.length) {
+          if (!waiting.length) return null;
+          return (
+            <section key={m} className="hmap__mkt hmap__mkt--narrow" aria-label={MARKET_LABEL[m]}>
+              <header className="hmap__head">
+                <h2 className="serif">{MARKET_LABEL[m]}</h2>
+                <span className="hmap__reg serif">No data yet</span>
+                <SessionChip k={MARKET_SESSION[m]} />
+              </header>
+              <p className="hmap__na">
+                {waiting.map((w) => w.symbol).join(", ")}: {waiting[0].reason}
+              </p>
+            </section>
+          );
+        }
         const liveN = list.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
         return (
           <section key={m} className={`hmap__mkt hmap__mkt--${list.length > 4 ? "wide" : "narrow"}`} aria-label={MARKET_LABEL[m]}>
@@ -100,7 +129,9 @@ function Heatmap({ ticks, statuses }: { ticks: Record<string, Tick>; statuses: R
                       </span>
                     </span>
                     <span className="tile__name">{inst.name}</span>
-                    <span className="tile__px mono">{fmtPrice(inst, t?.price ?? inst.price)}</span>
+                    <span className="tile__px mono">
+                      {fmtPrice(inst, t?.price ?? inst.price)} <FreshnessBadge inst={inst} compact />
+                    </span>
                     <SignalBadge inst={inst} status={statuses[inst.symbol]} />
                   </Link>
                 );
@@ -147,7 +178,7 @@ function MarketTable({ ticks, statuses }: { ticks: Record<string, Tick>; statuse
               <th>Signal</th>
               {th("conf", "Confidence", true)}
               <th>Regime</th>
-              <th>OI build-up</th>
+              <th>Data</th>
             </tr>
           </thead>
           <tbody>
@@ -171,12 +202,12 @@ function MarketTable({ ticks, statuses }: { ticks: Record<string, Tick>; statuse
                   <td>
                     <SignalBadge inst={inst} status={st} />
                   </td>
-                  <td className="r">{isTrade(s) && st !== "sit_out" && st !== "queued" ? `${Math.round(s.confidence * 100)}%` : <span className="t3">—</span>}</td>
+                  <td className="r">{isTrade(s) && st !== "sit_out" ? `${Math.round(s.confidence * 100)}%` : <span className="t3">—</span>}</td>
                   <td className="t2" style={{ fontFamily: "var(--font-ui)" }}>
                     {regimeLabel(s.regime)}
                   </td>
                   <td className="t2" style={{ fontFamily: "var(--font-ui)" }}>
-                    {inst.assetClass === "fx" ? `${buildUp(inst, px)} (futures)` : inst.assetClass === "crypto" ? `${buildUp(inst, px)} (perps)` : buildUp(inst, px)}
+                    <FreshnessBadge inst={inst} />
                   </td>
                 </tr>
               );

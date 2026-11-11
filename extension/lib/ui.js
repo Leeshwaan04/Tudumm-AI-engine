@@ -15,6 +15,8 @@ import {
   formatNumber,
   formatR,
   naReason,
+  ENGINE_TAG,
+  ENGINE_HELP,
 } from "./engine.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -72,15 +74,112 @@ export function wordmark() {
   return h("span", { class: "wordmark", "aria-label": "tudumm" }, logoMark({ size: 20 }), h("span", { class: "wordmark-text", "aria-hidden": "true" }, "tudumm"));
 }
 
-export function demoBadge() {
-  return h("span", { class: "demo-badge", title: "All prices, signals and track-record data are simulated." }, "DEMO DATA");
+// ------------------------------------------------------- Data state --
+// The current data payload ({ mode: "live"|"offline", reason, reasonText, stale, … })
+// so badges and notices on every surface say honestly what they show.
+
+let dataState = { mode: "offline", reason: null, reasonText: null, stale: false, recorded: false, retryInMs: null };
+
+export function setData(payload) {
+  if (payload) dataState = { mode: payload.mode === "live" && payload.universe ? "live" : "offline", reason: payload.reason || null, reasonText: payload.reasonText || null, stale: !!payload.stale, recorded: !!payload.recorded, retryInMs: payload.retryInMs || null };
+}
+export const isLive = () => dataState.mode === "live";
+
+/** "LIVE · BETA" / "LIVE · STALE" / "OFFLINE" for the top bar. */
+export function dataBadge() {
+  if (dataState.mode === "live") {
+    const stale = dataState.stale;
+    return h(
+      "span",
+      {
+        class: `data-badge data-badge--live${stale ? " is-stale" : ""}`,
+        title: stale
+          ? `Live data, but the last refresh failed: ${dataState.reasonText || "the API didn't answer"} Prices show when they were last updated.`
+          : dataState.recorded
+            ? "Preview: a recorded live snapshot. Crypto and the PAXG gold proxy still stream from Binance; other prices stay at their recorded time, shown on each price."
+            : "Live market data from free public sources. Each price shows its freshness: real-time, 15-min delayed, end of day or daily reference.",
+      },
+      h("i", { class: "data-dot", "aria-hidden": "true" }),
+      stale ? "LIVE · STALE" : dataState.recorded ? "LIVE · RECORDED" : "LIVE · BETA",
+    );
+  }
+  return h(
+    "span",
+    { class: "data-badge data-badge--offline", title: `No live data right now: ${dataState.reasonText || "the Tudumm API didn't answer."} Retrying automatically.` },
+    h("i", { class: "data-dot", "aria-hidden": "true" }),
+    "OFFLINE",
+  );
+}
+
+/**
+ * The full-view state while there is no live data: the API's reason and a retry.
+ * Nothing is filled in: no bundled data set, no made-up prices.
+ */
+export function offlineState({ onRetry } = {}) {
+  const secs = dataState.retryInMs ? Math.round(dataState.retryInMs / 1000) : null;
+  const retry = onRetry
+    ? h(
+        "button",
+        {
+          type: "button",
+          class: "btn btn--primary btn--sm",
+          onclick: async (e) => {
+            const b = e.currentTarget;
+            b.disabled = true;
+            b.textContent = "Retrying…";
+            try {
+              await onRetry();
+            } finally {
+              b.disabled = false;
+              b.textContent = "Retry now";
+            }
+          },
+        },
+        "Retry now",
+      )
+    : null;
+  return h(
+    "div",
+    { class: "notice notice--offline", role: "status", "aria-live": "polite" },
+    h("b", {}, "Live data temporarily unavailable — retrying."),
+    " ",
+    dataState.reasonText || "Can't reach Tudumm.",
+    h("span", { class: "notice-fine" }, ` Tudumm shows only real market data: prices and calls appear as soon as the API answers.${secs ? ` Next attempt in about ${secs} s.` : ""}`),
+    retry ? h("div", { class: "notice-actions" }, retry) : null,
+  );
+}
+
+/** Engine v0 honesty tag for live signals. */
+export function engineTag({ small = false } = {}) {
+  return h("span", { class: `engine-tag${small ? " engine-tag--sm" : ""}`, title: ENGINE_HELP, tabindex: "0", "aria-label": `${ENGINE_TAG}. ${ENGINE_HELP}` }, ENGINE_TAG);
+}
+
+/**
+ * The freshness badge every live price carries: "REAL-TIME · BINANCE · as of 14:32".
+ * Proxies are labelled ("PAXG PROXY FOR GOLD"). Null for a snapshot without live data.
+ */
+export function freshBadge(snap) {
+  if (!snap || !snap.live) return null;
+  const when = snap.hasPrice ? snap.asOfText : "no price yet";
+  return h(
+    "span",
+    { class: "fresh-wrap" },
+    h(
+      "span",
+      { class: `fresh mono${snap.stale ? " is-stale" : ""}${snap.freshness === "realtime" ? " is-rt" : ""}`, title: snap.freshnessHelp || "", "data-fresh": "" },
+      snap.freshnessText || "SOURCE UNKNOWN",
+      when ? h("span", { class: "fresh-when", "data-asof": "" }, `· ${when}`) : null,
+      snap.stale && snap.hasPrice ? h("span", { class: "fresh-stale" }, "· STALE") : null,
+    ),
+    snap.proxyText ? h("span", { class: "fresh proxy mono", title: snap.freshnessHelp || "" }, snap.proxyText) : null,
+  );
 }
 
 export function disclaimer() {
   return h(
     "p",
     { class: "disclaimer" },
-    "Tudumm is a prototype. All prices, signals and track-record data are simulated. Nothing here is investment advice. Trading involves risk of loss.",
+    "Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss. Live signals come from engine v0, which is rule-based and uncalibrated.",
   );
 }
 
@@ -297,33 +396,15 @@ function cardHead(snap, { star } = {}) {
 
 function buildCardBody(snap, opts) {
   const kids = [];
-  if (snap.status === "queued") {
-    kids.push(
-      cardHead(snap, opts),
-      h(
-        "div",
-        { class: "sc-drum" },
-        logoMark({ size: 34, drum: true }),
-        h("div", { class: "sc-drum-text" }, h("span", { class: "eyebrow" }, "Next reveal in"), h("span", { class: "sc-countdown mono", "data-countdown": "" }, snap.countdown)),
-        statusPill("queued"),
-      ),
-      h(
-        "div",
-        { class: "sc-reading", "aria-hidden": "true" },
-        LAYERS.map((l) => h("div", { class: "sc-reading-seg" }, h("i"), h("span", {}, l.short))),
-      ),
-      h("p", { class: "sc-note" }, "Five layers are being read together. The verdict lands on the beat."),
-    );
-    return kids;
-  }
   if (snap.status === "sit_out") {
     kids.push(
       cardHead(snap, opts),
       h("div", { class: "sc-sit" }, h("h3", { class: "sc-sit-title" }, "Sitting out"), statusPill("sit_out")),
       h("div", { class: "sc-live" }, h("span", { class: "sc-price mono", "data-price": "" }, snap.priceText), changeEl(snap)),
+      freshBadge(snap),
       h("p", { class: "sc-reason" }, snap.thesis),
       confluenceMeter(snap.confluence, { muted: true }),
-      h("p", { class: "sc-note" }, `No levels published. ${REGIME_TEXT[snap.regime] || ""} regime. Tudumm only issues a setup when the layers line up.`),
+      h("p", { class: "sc-note" }, `No levels published. ${REGIME_TEXT[snap.regime] || snap.regime || ""} regime. Tudumm only issues a setup when the layers line up.`),
     );
     return kids;
   }
@@ -342,6 +423,7 @@ function buildCardBody(snap, opts) {
       ),
       statusPill(snap.status),
     ),
+    snap.live ? h("div", { class: "sc-engine" }, engineTag()) : null,
     h(
       "div",
       { class: "sc-live" },
@@ -353,6 +435,7 @@ function buildCardBody(snap, opts) {
           ? h("span", { class: "sc-ur sc-ur--pending mono" }, "awaiting entry")
           : null,
     ),
+    freshBadge(snap),
     tradeMap(snap.map, { levels: snap.levels }),
     levelsRow(snap.levels),
     confluenceMeter(snap.confluence),
@@ -363,8 +446,8 @@ function buildCardBody(snap, opts) {
 }
 
 /**
- * A live SignalCard. Re-renders itself on queued → revealed (with the Reveal),
- * updates price / R / needle on ticks, and refreshes "ago" + countdowns.
+ * A live SignalCard. Re-renders itself (with the Reveal) when the signal's status
+ * changes, updates price / R / needle on real ticks, and refreshes "ago".
  */
 export function createSignalCard(engine, symbol, opts = {}) {
   const el = h("article", { class: "sc", dataset: { symbol } });
@@ -375,10 +458,10 @@ export function createSignalCard(engine, symbol, opts = {}) {
 
   function render(withReveal) {
     snap = engine.snapshot(symbol);
-    el.className = `sc sc--${snap.status === "sit_out" ? "sit" : snap.status === "queued" ? "queued" : snap.direction === "SHORT" ? "short" : "long"}`;
+    el.className = `sc sc--${snap.status === "sit_out" ? "sit" : snap.direction === "SHORT" ? "short" : "long"}`;
     el.dataset.status = snap.status;
     el.setAttribute("aria-label", `${snap.symbol} ${snap.direction ? `${snap.direction} ${snap.confidencePct}% confidence` : STATUS_TEXT[snap.status]}`);
-    el.replaceChildren(...buildCardBody(snap, { star: opts.star ? opts.star() : null }), h("i", { class: "sc-sweep", "aria-hidden": "true" }));
+    el.replaceChildren(...buildCardBody(snap, { star: opts.star ? opts.star() : null }).filter(Boolean), h("i", { class: "sc-sweep", "aria-hidden": "true" }));
     lastStatus = snap.status;
     lastTick = engine.quote(symbol).tick;
     if (withReveal) playReveal(el);
@@ -388,24 +471,21 @@ export function createSignalCard(engine, symbol, opts = {}) {
   function update(now) {
     const st = engine.signalState(symbol, now);
     if (st.status !== lastStatus) {
-      const wasQueued = lastStatus === "queued";
       render(true);
-      if (wasQueued && opts.onReveal) opts.onReveal(snap);
       return;
     }
     const sec = Math.floor(now / 1000);
     if (sec !== lastSec) {
       lastSec = sec;
       const s = engine.snapshot(symbol, now);
-      const cd = el.querySelector("[data-countdown]");
-      if (cd && s.countdown) cd.textContent = s.countdown;
       const ago = el.querySelector("[data-ago]");
       if (ago) ago.textContent = s.issuedText;
+      const asof = el.querySelector("[data-asof]");
+      if (asof && s.live && s.hasPrice && s.asOfText) asof.textContent = `· ${s.asOfText}`;
     }
     const q = engine.quote(symbol, now);
     if (q.tick === lastTick) return;
     lastTick = q.tick;
-    if (snap.status === "queued") return;
     const s = engine.snapshot(symbol, now);
     const p = el.querySelector("[data-price]");
     if (p) {
@@ -414,6 +494,11 @@ export function createSignalCard(engine, symbol, opts = {}) {
     }
     const chg = el.querySelector(".sc-chg");
     if (chg) chg.replaceWith(changeEl(s));
+    const fw = el.querySelector(".fresh-wrap");
+    if (fw && s.live) {
+      const next = freshBadge(s);
+      if (next) fw.replaceWith(next);
+    }
     const r = el.querySelector("[data-r]");
     if (r && s.rText) {
       r.textContent = s.rText;
@@ -433,7 +518,6 @@ export function createRow(engine, symbol, { onOpen, index = 0 } = {}) {
   const el = h("button", { type: "button", class: "row", dataset: { symbol }, style: { "--i": index } });
   let lastStatus = null;
   let lastTick = null;
-  let lastSec = -1;
 
   function render(withReveal) {
     const s = engine.snapshot(symbol);
@@ -443,11 +527,7 @@ export function createRow(engine, symbol, { onOpen, index = 0 } = {}) {
     let verdict;
     let sub;
     let right;
-    if (s.status === "queued") {
-      verdict = h("span", { class: "row-verdict" }, statusPill("queued"), h("span", { class: "row-count mono", "data-countdown": "" }, s.countdown));
-      sub = "Revealing on the beat";
-      right = logoMark({ size: 22, drum: true });
-    } else if (s.status === "sit_out") {
+    if (s.status === "sit_out") {
       verdict = h("span", { class: "row-verdict" }, statusPill("sit_out"));
       sub = REGIME_TEXT[s.regime] || s.regime;
       right = confluenceMeter(s.confluence, { muted: true, mini: true });
@@ -463,7 +543,17 @@ export function createRow(engine, symbol, { onOpen, index = 0 } = {}) {
     );
     el.replaceChildren(
       h("span", { class: "row-main" }, h("span", { class: "row-line" }, h("span", { class: "row-sym mono" }, s.symbol), verdict), h("span", { class: "row-sub" }, h("span", { class: "row-name" }, inst.name), h("span", { class: "row-dot", "aria-hidden": "true" }, "·"), h("span", { class: "row-status mono", "data-sub": "" }, sub))),
-      h("span", { class: "row-side" }, h("span", { class: "row-viz" }, right), h("span", { class: "row-price mono", "data-price": "" }, s.priceText)),
+      h(
+        "span",
+        { class: "row-side" },
+        h("span", { class: "row-viz" }, right),
+        h(
+          "span",
+          { class: "row-pline" },
+          h("span", { class: "row-price mono", "data-price": "" }, s.priceText),
+          s.live && s.freshnessShort ? h("span", { class: `row-fresh mono${s.stale ? " is-stale" : ""}`, title: `${s.freshnessText}${s.asOfText ? ` · ${s.asOfText}` : ""}${s.stale ? " · stale" : ""}` }, s.freshnessShort) : null,
+        ),
+      ),
     );
     if (withReveal) playReveal(el);
   }
@@ -471,12 +561,6 @@ export function createRow(engine, symbol, { onOpen, index = 0 } = {}) {
   function update(now) {
     const st = engine.signalState(symbol, now);
     if (st.status !== lastStatus) return render(true);
-    const sec = Math.floor(now / 1000);
-    if (sec !== lastSec && lastStatus === "queued") {
-      lastSec = sec;
-      const cd = el.querySelector("[data-countdown]");
-      if (cd) cd.textContent = engine.snapshot(symbol, now).countdown;
-    }
     const q = engine.quote(symbol, now);
     if (q.tick === lastTick) return;
     lastTick = q.tick;
@@ -485,6 +569,11 @@ export function createRow(engine, symbol, { onOpen, index = 0 } = {}) {
     if (p) {
       p.textContent = s.priceText;
       flash(p, q.dir);
+    }
+    const fr = el.querySelector(".row-fresh");
+    if (fr && s.live) {
+      fr.title = `${s.freshnessText}${s.asOfText ? ` · ${s.asOfText}` : ""}${s.stale ? " · stale" : ""}`;
+      fr.classList.toggle("is-stale", !!s.stale);
     }
     if (s.rText) {
       const sub = el.querySelector("[data-sub]");
@@ -548,11 +637,13 @@ export function setupFacts(engine, symbol) {
     ["Market", `${inst.exchange} · ${inst.currency}`],
     ["Ledger id", `#${s.id}`],
   ];
+  if (inst.live) rows.push(["Engine", "v0 · rule-based, uncalibrated"]);
+  if (inst.live && inst.proxyNote) rows.push(["Proxy", inst.proxyNote]);
   return h(
     "section",
     { class: "facts" },
     h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, "Setup")),
-    h("dl", { class: "facts-grid" }, rows.map(([k, v]) => h("div", { class: "fact" }, h("dt", {}, k), h("dd", { class: /\d|#/.test(v) && k !== "Strategy" ? "mono" : "" }, v)))),
+    h("dl", { class: "facts-grid" }, rows.map(([k, v]) => h("div", { class: "fact" }, h("dt", {}, k), h("dd", { class: /\d|#/.test(v) && !["Strategy", "Engine", "Proxy"].includes(k) ? "mono" : "" }, v)))),
   );
 }
 
@@ -579,6 +670,11 @@ export function createSizer(engine, symbol, settings, { onEditDefaults } = {}) {
     const r = engine.sizePosition(symbol, { capital, currency: ccy, riskPct });
     if (!r) {
       out.replaceChildren(row("Result", "Enter capital above 0 and risk between 0.05% and 10%.", "so--wide"));
+      notes.textContent = "";
+      return;
+    }
+    if (r.unavailable) {
+      out.replaceChildren(row("Not available", r.unavailable, "so--wide"));
       notes.textContent = "";
       return;
     }

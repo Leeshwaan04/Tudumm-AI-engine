@@ -1,41 +1,50 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Bookmark, BookmarkCheck, ChevronRight, Star } from "lucide-react";
-import { PriceChart } from "../../components/PriceChart";
 import { LayerEvidence } from "../../components/Evidence";
 import { SignalCard, regimeLabel } from "../../components/SignalCard";
 import { ConfluenceMeter, DirectionPill, LevelsRow, LivePrice, StatusPill, TradeMap } from "../../components/signal";
-import { EmptyState, SessionChip, toast } from "../../components/ui";
+import { SessionChip, toast } from "../../components/ui";
 import { useCountUp, useDocumentTitle } from "../../components/hooks";
-import { LAYER_LABEL, LAYER_ORDER, MARKET_LABEL, agreement, entryMid, getInstrument, instrumentsIn, rAt, riskPerUnit } from "../../engine/seed";
+import { LAYER_LABEL, LAYER_ORDER, MARKET_LABEL, agreement, entryMid, getInstrument, instrumentsIn, rAt, riskPerUnit } from "../../engine/universe";
 import type { Currency, Instrument as Inst, LayerId, TradeSignal } from "../../engine/types";
 import { isTrade } from "../../engine/types";
-import { TIMEFRAMES, asTimeframe, type Timeframe } from "../../engine/candles";
 import { MARKET_SESSION } from "../../engine/sessions";
 import { useAllTicks, useLiveStatus, useTick } from "../../engine/live";
 import { CURRENCIES, trackingStore, toggleIn, useProfile, useStore, watchlistStore, type Persona, type ProfileCurrency } from "../../engine/profile";
 import { convert, rateNote } from "../../engine/fx";
 import { fmtMoney, fmtPrice, fmtR, fmtSignedPct, MINUS } from "../../engine/format";
 import { layerTone } from "../../engine/evidence";
+import { useDataset } from "../../engine/universe";
+import { useData } from "../../components/DataProvider";
+import { EngineTag, FreshnessBadge, LiveUnavailable, NAState, SourceLine, fmtAsOf, sitOutLabel } from "../../components/badges";
+import { AlertsPanel } from "../../components/AlertsPanel";
+import { LiveChart, TF_SECONDS } from "../../components/LiveChart";
+import { marketApi, type CandlesRes } from "../../api/market";
+import { useApi } from "../../api/useApi";
+import { track } from "../../api/events";
 
 const PERSONA_TAB: Record<Persona, LayerId> = { scalper: "flow", swing: "price", options: "derivatives", investor: "fundamentals" };
 
 export default function Instrument() {
   const { symbol } = useParams();
+  useDataset();
+  const data = useData();
   const inst = getInstrument(symbol);
   useDocumentTitle(inst ? `${inst.symbol} · Tudumm` : "Unknown symbol · Tudumm");
+  if (!inst && data.phase !== "ready") return <LiveUnavailable />;
   if (!inst) {
+    const u = data.unavailable.find((x) => x.symbol === symbol?.toUpperCase());
     return (
-      <EmptyState
-        title={`“${symbol}” isn’t covered in this demo.`}
-        action={
-          <Link to="/app/markets" className="btn">
-            Browse all markets
-          </Link>
-        }
-      >
-        Tudumm’s prototype covers 22 instruments. Use search (⌘K / Ctrl K) to find one by symbol, name or alias.
-      </EmptyState>
+      <div className="inst-na">
+        <NAState title={u ? `No live data for ${u.symbol} yet` : `“${symbol}” isn’t in Tudumm’s live universe.`} reason={u ? u.reason : "Use search (⌘K / Ctrl K) to find a covered instrument by symbol, name or alias."}>
+          <div className="inst-na__act">
+            <Link to="/app/markets" className="btn btn--sm">
+              Browse all markets
+            </Link>
+          </div>
+        </NAState>
+      </div>
     );
   }
   return <InstrumentView key={inst.symbol} inst={inst} />;
@@ -48,12 +57,19 @@ function InstrumentView({ inst }: { inst: Inst }) {
   const watch = useStore(watchlistStore);
   const tracked = useStore(trackingStore).includes(inst.symbol);
   const starred = watch.includes(inst.symbol);
-  const [tf, setTf] = useState<Timeframe>(asTimeframe(isTrade(s) ? s.timeframe : "1D"));
-  const [showEma, setShowEma] = useState(true);
   const [tab, setTab] = useState<LayerId>(PERSONA_TAB[profile.persona]);
   const t = useTick(inst.symbol);
   const chg = t.price - inst.prevClose;
   const trade = isTrade(s) && status !== "sit_out";
+
+  useEffect(() => {
+    track("instrument_view", { symbol: inst.symbol, market: inst.market, live: !!inst.live });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inst.symbol]);
+  useEffect(() => {
+    track("signal_view", { symbol: inst.symbol, signalId: s.id, status: s.status, live: !!inst.live });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.id]);
 
   return (
     <div className="inst">
@@ -75,9 +91,16 @@ function InstrumentView({ inst }: { inst: Inst }) {
             <span className="chip">{regimeLabel(s.regime)}</span>
             <SessionChip k={MARKET_SESSION[inst.market]} />
           </div>
+          {inst.live && (
+            <div className="ihead__fresh">
+              <FreshnessBadge inst={inst} />
+              {inst.proxyNote && <p className="ihead__proxy">{inst.proxyNote}</p>}
+            </div>
+          )}
         </div>
         <div className="ihead__px">
           <LivePrice inst={inst} className="ihead__live" />
+          {inst.live && <SourceLine source={inst.source} asOf={t.at ? new Date(t.at).toISOString() : inst.asOf} extra={inst.freshness === "realtime" ? "streaming" : undefined} />}
           <p className={`ihead__chg mono ${chg >= 0 ? "c-long" : "c-short"}`}>
             <span aria-hidden="true">{chg >= 0 ? "▲" : "▼"}</span> {chg >= 0 ? "+" : MINUS}
             {fmtPrice(inst, Math.abs(chg), { currency: false })} ({fmtSignedPct((chg / inst.prevClose) * 100)})
@@ -108,53 +131,7 @@ function InstrumentView({ inst }: { inst: Inst }) {
 
       <div className="inst__cols">
         <div className="inst__left">
-        <section className="panel chart-panel o-1" aria-label="Price chart">
-          <div className="chart-panel__bar">
-            <div className="seg" role="group" aria-label="Timeframe">
-              {TIMEFRAMES.map((x) => (
-                <button key={x} type="button" aria-pressed={tf === x} onClick={() => setTf(x)}>
-                  {x}
-                </button>
-              ))}
-            </div>
-            <button type="button" className="fchip" aria-pressed={showEma} onClick={() => setShowEma((v) => !v)}>
-              EMA 20 / 50
-            </button>
-            <div className="chart-legend mono" aria-hidden="true">
-              {showEma && (
-                <>
-                  <span>
-                    <i style={{ background: "#7FA7FF" }} /> EMA 20
-                  </span>
-                  <span>
-                    <i style={{ background: "#C9A6FF" }} /> EMA 50
-                  </span>
-                </>
-              )}
-              {isTrade(s) && status !== "queued" && (
-                <>
-                  <span>
-                    <i className="lg-zone" /> Entry zone
-                  </span>
-                  <span>
-                    <i style={{ background: "var(--short)" }} /> SL
-                  </span>
-                  <span>
-                    <i style={{ background: "var(--long)" }} /> T1 / T2
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-          <PriceChart inst={inst} tf={tf} showEma={showEma} status={status} />
-          <p className="chart-panel__foot">
-            Simulated candles, deterministic per timeframe, ending at the live demo price. Chart by{" "}
-            <a className="u-link" href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
-              TradingView Lightweight Charts™
-            </a>
-            .
-          </p>
-        </section>
+        <LiveChartPanel inst={inst} status={status} />
         <section className="panel evidence o-3" aria-label="Evidence by layer">
           <div className="etabs" role="tablist" aria-label="Five layers">
             {LAYER_ORDER.map((l) => {
@@ -175,7 +152,7 @@ function InstrumentView({ inst }: { inst: Inst }) {
         </div>
         <div className="inst__right">
           <div className="inst__signal o-2">
-          {status === "queued" || !trade ? (
+          {!trade ? (
             <>
               <SignalCard inst={inst} linkTo={null} />
               {!trade && (
@@ -190,6 +167,7 @@ function InstrumentView({ inst }: { inst: Inst }) {
           )}
           </div>
           <div className="o-4 inst__side">
+            <AlertsPanel inst={inst} />
             <AnalystNote inst={inst} />
             <Related inst={inst} />
           </div>
@@ -221,6 +199,11 @@ function SignalPanel({ inst, s }: { inst: Inst; s: TradeSignal }) {
       <p className="spanel__meta mono">
         <span>{s.strategy}</span> · <span>{s.timeframe}</span> · <span>{s.style}</span> · <span className="t3">#{s.id}</span>
       </p>
+      {s.live && (
+        <p className="spanel__engine">
+          <EngineTag /> <span className="t3">Confidence is a rule-based score, not a measured hit rate.</span>
+        </p>
+      )}
       <div className="spanel__live">
         <span className="t3">Now</span> <LivePrice inst={inst} />
         <span className={`mono ${filled ? (r >= 0 ? "c-long" : "c-short") : "t2"}`}>{filled ? `${fmtR(r)} open` : "not filled"}</span>
@@ -249,6 +232,15 @@ function PositionSizer({ inst, s }: { inst: Inst; s: TradeSignal }) {
     setRiskPct(String(profile.riskPct));
     setCur(profile.currency);
   }, [profile.capital, profile.riskPct, profile.currency]);
+
+  const used = useRef(false);
+  useEffect(() => {
+    if (used.current) return;
+    if (capital === String(profile.capital) && riskPct === String(profile.riskPct) && cur === profile.currency) return;
+    used.current = true;
+    track("sizer_use", { symbol: inst.symbol });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capital, riskPct, cur]);
 
   const cap = Number(capital.replace(/[^0-9.]/g, ""));
   const rp = Number(riskPct);
@@ -295,6 +287,10 @@ function PositionSizer({ inst, s }: { inst: Inst; s: TradeSignal }) {
       </div>
       {!valid ? (
         <p className="sizer__warn">Enter capital above zero and a risk between 0 and 10%.</p>
+      ) : !Number.isFinite(budget) ? (
+        <p className="sizer__warn">
+          No live {cur}→{instCur === "USDT" ? "USD" : instCur} rate yet, so Tudumm can’t convert your capital. Set the capital currency to {instCur === "USDT" ? "USD" : instCur} to size this trade.
+        </p>
       ) : qty <= 0 ? (
         <p className="sizer__warn">
           Your risk budget ({fmtMoney(budget, instCur)}) is smaller than the risk on one {unit === "shares" ? "share" : "unit"} ({fmtMoney(perUnit, instCur)}). Raise capital or risk %, or skip this trade.
@@ -353,7 +349,12 @@ function AnalystNote({ inst }: { inst: Inst }) {
     return best;
   }, [s]);
   const trade = isTrade(s);
-  const mind = trade
+  const tf = (s as { timeframe?: string }).timeframe ?? "1D";
+  const mind = s.live
+    ? trade
+      ? `${weakest ? `${LAYER_LABEL[weakest.l]} is the weakest leg (${weakest.v > 0 ? "+" : ""}${weakest.v}). ` : ""}Engine v0 re-scores on every completed ${tf} bar; a stop or the invalidation above closes the call, and an entry that never fills expires. Every outcome is written to the public ledger.`
+      : `${sitOutLabel(s.sitOutReason) ? `Why it's sitting out: ${sitOutLabel(s.sitOutReason)?.toLowerCase()}. ` : ""}${s.candidate ? `It was leaning ${s.candidate === "LONG" ? "▲ LONG" : "▼ SHORT"}. ` : ""}A call needs a clear trend, momentum that agrees, and at least three layers scoring +15 or better on a completed ${tf} bar.`
+    : trade
     ? `${weakest ? `${LAYER_LABEL[weakest.l]} is the weakest leg (${weakest.v > 0 ? "+" : ""}${weakest.v}); if it turns against the call, confidence falls below 55% and Tudumm stands aside. ` : ""}If the entry never fills, the call expires and is logged as expired on the ledger.`
     : `At least four of five layers agreeing on one side, with price leaving the ${regimeLabel(s.regime).toLowerCase()} regime on volume. Until then, no call.`;
   return (
@@ -394,7 +395,7 @@ function Related({ inst }: { inst: Inst }) {
       </header>
       {others.length === 0 ? (
         <p className="related__empty">
-          {inst.symbol} is the only {MARKET_LABEL[inst.market]} instrument in this demo. See the{" "}
+          {inst.symbol} is the only {MARKET_LABEL[inst.market]} instrument with live data right now. See the{" "}
           <Link className="u-link" to="/app">
             full feed
           </Link>
@@ -422,8 +423,6 @@ function RelatedRow({ inst }: { inst: Inst }) {
         <span className="rrow__sig">
           {status === "sit_out" || !isTrade(s) ? (
             <span className="mono c-neutral">SITTING OUT</span>
-          ) : status === "queued" ? (
-            <span className="mono c-brand">REVEALING…</span>
           ) : (
             <>
               <DirectionPill direction={s.direction} size="sm" />
@@ -433,5 +432,112 @@ function RelatedRow({ inst }: { inst: Inst }) {
         </span>
       </Link>
     </li>
+  );
+}
+
+/* ---------------- live chart panel ---------------- */
+function liveTimeframes(inst: Inst): string[] {
+  return inst.source === "binance" || inst.symbol === "XAUUSD" ? ["15m", "1H", "4H", "1D", "1W"] : ["1D", "1W"];
+}
+
+function LiveChartPanel({ inst, status }: { inst: Inst; status: ReturnType<typeof useLiveStatus> }) {
+  const tfs = liveTimeframes(inst);
+  const s = inst.signal;
+  const sigTf = (s as { timeframe?: string }).timeframe;
+  const [tf, setTf] = useState<string>(sigTf && tfs.includes(sigTf) ? sigTf : tfs.includes("4H") ? "4H" : "1D");
+  const [showEma, setShowEma] = useState(true);
+  const realtime = inst.freshness === "realtime";
+  const q = useApi<CandlesRes>(`mkt:candles:${inst.symbol}:${tf}`, () => marketApi.candles(inst.symbol, tf, 400), {
+    refreshMs: realtime ? 60_000 : 300_000,
+    staleMs: 20_000,
+  });
+  const d = q.data;
+  const line = d ? d.ohlc === false : inst.ohlc === false;
+  const bars = d?.bars ?? [];
+  const effTf = (d as (CandlesRes & { requestedTf?: string; note?: string | null }) | undefined)?.tf ?? tf;
+  const note = (d as (CandlesRes & { note?: string | null }) | undefined)?.note ?? null;
+  return (
+    <section className="panel chart-panel o-1" aria-label="Price chart">
+      <div className="chart-panel__bar">
+        <div className="seg" role="group" aria-label="Timeframe">
+          {tfs.map((x) => (
+            <button key={x} type="button" aria-pressed={tf === x} onClick={() => setTf(x)}>
+              {x}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="fchip" aria-pressed={showEma} onClick={() => setShowEma((v) => !v)}>
+          EMA 20 / 50
+        </button>
+        <div className="chart-legend mono" aria-hidden="true">
+          {showEma && (
+            <>
+              <span>
+                <i style={{ background: "#7FA7FF" }} /> EMA 20
+              </span>
+              <span>
+                <i style={{ background: "#C9A6FF" }} /> EMA 50
+              </span>
+            </>
+          )}
+          {isTrade(s) && status !== "sit_out" && (
+            <>
+              <span>
+                <i className="lg-zone" /> Entry zone
+              </span>
+              <span>
+                <i style={{ background: "var(--short)" }} /> SL
+              </span>
+              <span>
+                <i style={{ background: "var(--long)" }} /> T1 / T2
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+      {q.error && !d ? (
+        <div className="chart chart--na">
+          <NAState title="Chart data didn't load" reason="The candles endpoint didn't answer. The price above still updates.">
+            <button type="button" className="btn btn--sm" onClick={() => void q.reload()}>
+              Retry
+            </button>
+          </NAState>
+        </div>
+      ) : !d ? (
+        <div className="chart chart--loading" role="status">
+          <span className="mono t3">Loading {tf} bars…</span>
+        </div>
+      ) : bars.length === 0 ? (
+        <div className="chart chart--na">
+          <NAState title="No bars stored yet" reason={note ?? "The ingest job hasn't produced history for this instrument and timeframe yet."} />
+        </div>
+      ) : (
+        <LiveChart inst={inst} bars={bars} line={line} tfSec={TF_SECONDS[effTf] ?? 86400} tickable={realtime && effTf === tf} showEma={showEma} status={status} />
+      )}
+      <p className="chart-panel__foot">
+        {d ? (
+          <>
+            {bars.length} {effTf} bars · <SourceInline source={d.source} asOf={d.asOf} />
+            {line ? " · close-only reference rates, drawn as a line" : ""}
+            {realtime && effTf === tf ? " · last bar follows the live stream" : ""}. {note ? `${note} ` : ""}
+          </>
+        ) : null}
+        Chart by{" "}
+        <a className="u-link" href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
+          TradingView Lightweight Charts™
+        </a>
+        .
+      </p>
+    </section>
+  );
+}
+
+function SourceInline({ source, asOf }: { source?: string; asOf?: string }) {
+  const NAMES: Record<string, string> = { binance: "Binance", cboe: "Cboe (delayed)", "nse-archives": "NSE archives (EOD)", "ecb-frankfurter": "ECB reference rates" };
+  return (
+    <span className="mono">
+      {source ? (NAMES[source] ?? source) : "source"}
+      {asOf ? ` · as of ${fmtAsOf(asOf, { date: true })}` : ""}
+    </span>
   );
 }

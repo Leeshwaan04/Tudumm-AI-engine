@@ -256,3 +256,65 @@ test("order book imbalance within ±1% of mid", () => {
   assert.equal(im.ratio, 2);
   assert.ok(Math.abs(im.imbalance - 1 / 3) < 1e-9);
 });
+
+// ---- forming-bar watermark (live quotes step an open call many times inside one bar) ----
+
+test("lifecycle: a forming bar's earlier high can't count as T1 after a later activation", () => {
+  // day 1 is forming. Pass 1: price opened high (105.5 > T1) then fell into the zone -> activated.
+  const s0 = sig({ status: "pending" });
+  const now1 = 1 * D + 3600;
+  const p1 = stepLifecycle(s0, [bar(1, 105.5, 105.5, 100.5, 100.5)], 100.5, now1, D);
+  assert.equal(p1.signal.status, "active");
+  assert.equal(p1.signal.formingT, 1 * D);
+  assert.equal(p1.signal.formingHigh, 105.5);
+  // Pass 2 (same bar, no new extremes): the 105.5 high was printed BEFORE activation -> no T1.
+  const p2 = stepLifecycle(p1.signal, [bar(1, 105.5, 105.5, 100.4, 101)], 101, now1 + 5, D);
+  assert.deepEqual(p2.transitions.map((t) => t.type), []);
+  assert.equal(p2.signal.status, "active");
+  // Pass 3: a NEW high above T1 after activation does count.
+  const p3 = stepLifecycle(p2.signal, [bar(1, 105.5, 105.8, 100.4, 105.8)], 105.8, now1 + 10, D);
+  assert.deepEqual(p3.transitions.map((t) => t.type), ["t1_hit"]);
+});
+
+test("lifecycle: after T1 inside a forming bar, the day's earlier low can't trail it out at breakeven", () => {
+  const s0 = sig({ status: "active" });
+  const now1 = 1 * D + 3600;
+  // low 99.2 first (above the 97 stop), then a rally to 104.6 -> T1, stop -> breakeven 100
+  const p1 = stepLifecycle(s0, [bar(1, 100, 104.6, 99.2, 104.6)], 104.6, now1, D);
+  assert.equal(p1.signal.status, "t1_hit");
+  assert.equal(p1.signal.stopCurrent, 100);
+  // next pass: same bar range (99.2 low is old) -> still open at T1
+  const p2 = stepLifecycle(p1.signal, [bar(1, 100, 104.6, 99.2, 103)], 103, now1 + 5, D);
+  assert.equal(p2.signal.status, "t1_hit");
+  assert.deepEqual(p2.transitions, []);
+  // when the bar completes with no new extremes, nothing changes either; the bar is counted once
+  const p3 = stepLifecycle(p2.signal, [bar(1, 100, 104.6, 99.2, 103)], 103, 2 * D, D);
+  assert.equal(p3.signal.status, "t1_hit");
+  assert.equal(p3.signal.barsElapsed, 1);
+  assert.equal(p3.signal.checkedThroughT, 1 * D);
+  assert.equal(p3.signal.formingT, null);
+  // a NEW low below breakeven after T1 does trail it out
+  const p4 = stepLifecycle(p3.signal, [bar(1, 100, 104.6, 99.2, 103), bar(2, 103, 103, 99.8, 99.9)], 99.9, 2 * D + 60, D);
+  assert.equal(p4.signal.status, "closed");
+  assert.equal(p4.signal.outcome, "trailed");
+});
+
+test("lifecycle: a bar is complete at its session close (closeOffsetSec), not 24 h after its open", () => {
+  const CLOSE = 37800; // NSE daily bar: 16:00 IST after its 00:00 UTC open time
+  const s0 = sig({ status: "active" });
+  const before = stepLifecycle(s0, [bar(1, 100, 101, 99.5, 100.5)], 100.5, 1 * D + CLOSE - 60, CLOSE);
+  assert.equal(before.signal.barsElapsed, 0);
+  const after = stepLifecycle(before.signal, [bar(1, 100, 101, 99.5, 100.5)], 100.5, 1 * D + CLOSE + 60, CLOSE);
+  assert.equal(after.signal.barsElapsed, 1);
+  assert.equal(after.signal.checkedThroughT, 1 * D);
+  // and re-stepping later (e.g. the */15 cron overnight) doesn't touch that bar again
+  const later = stepLifecycle(after.signal, [bar(1, 100, 101, 99.5, 100.5)], 100.5, 1 * D + 80000, CLOSE);
+  assert.equal(later.signal.barsElapsed, 1);
+  assert.deepEqual(later.transitions, []);
+});
+
+test("lifecycle: without a watermark (first sight of a bar) behaviour is unchanged", () => {
+  const a = stepLifecycle(sig(), [bar(1, 101, 105, 100, 104.9), bar(2, 105, 108, 104.6, 107)], null, NOW);
+  const b = stepLifecycle(sig(), [bar(1, 101, 105, 100, 104.9), bar(2, 105, 108, 104.6, 107)], null, NOW, D);
+  assert.deepEqual(a.signal, b.signal);
+});

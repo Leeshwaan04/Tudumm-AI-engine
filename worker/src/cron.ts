@@ -50,10 +50,19 @@ export async function runMarketCycle(env: Env, now: Date, opts: { forceFetch?: b
   let job: JobOutput = { writes: [], memBars: {}, memSnapshots: {}, memQuotes: {}, prices: {}, symbols: [] };
   const notes: string[] = [];
   if (liveData) {
-    const [spy] = await db.read([stmt(`SELECT COUNT(*) AS n FROM quotes WHERE symbol = 'SPY'`)]);
-    const usDue = opts.forceFetch || usSessionOpen(now) || Number(spy?.[0]?.n ?? 0) === 0;
-    const [c, u] = await Promise.all([cryptoJob(db, health, now), usDue ? usQuotesJob(health, now) : Promise.resolve(null)]);
+    const [probe] = await db.read([
+      stmt(`SELECT (SELECT COUNT(*) FROM quotes WHERE symbol = 'SPY') AS spy, (SELECT as_of FROM quotes WHERE symbol = 'BTCUSDT') AS btc_as_of`),
+    ]);
+    const usDue = opts.forceFetch || usSessionOpen(now) || Number(probe?.[0]?.spy ?? 0) === 0;
+    // The live runner (runner/live.ts) streams crypto from its own egress every few seconds; when it has
+    // pushed within 3 minutes, don't re-fetch from Cloudflare (Binance/Bybit refuse some CF egress and
+    // would only flap the source health). Evaluation below still runs on the stored bars.
+    const btcAsOf = probe?.[0]?.btc_as_of ? Date.parse(String(probe[0].btc_as_of)) : 0;
+    const runnerFed = !opts.forceFetch && now.getTime() - btcAsOf < 180_000;
+    const empty: JobOutput = { writes: [], memBars: {}, memSnapshots: {}, memQuotes: {}, prices: {}, symbols: [] };
+    const [c, u] = await Promise.all([runnerFed ? Promise.resolve(empty) : cryptoJob(db, health, now), usDue ? usQuotesJob(health, now) : Promise.resolve(null)]);
     job = u ? merge(c, u) : c;
+    if (runnerFed) notes.push("crypto streamed by the live runner: fetch skipped");
     if (!usDue) notes.push("US closed: quotes skipped");
     await db.write([...job.writes, ...healthStmts(health.entries(), nowIso)]);
   } else notes.push("live_data flag is off: fetching skipped");

@@ -7,6 +7,14 @@ Read first:
 
 **Current state:** v0.2 work was started by earlier agents and **is partially done on disk**. Inspect `git status` / `git diff`, and the untracked files under `web/src/api`, `web/src/admin`, `web/src/components/{DataProvider,Turnstile,badges}.tsx` and `extension/lib/{account,datasource,ticks}.js`. **Continue from that state.** Don't restart from scratch, but do fix anything broken.
 
+
+> ## ⚠️ OWNER DIRECTIVE (overrides anything below): NO demo / simulated / dummy / hard-coded market data ANYWHERE
+> - **Remove Demo mode entirely** (web app, landing page, admin, extension). No `LIVE/DEMO` switch, no `DEMO DATA` badge, no fallback to `seed.json`.
+> - Do not ship the seed dataset or the simulated generators (`web/src/engine/{candles,orderflow,derivatives,fundamentals,prng}` random walk, generated order book/option chain/fundamentals, simulated ledger) in any runtime bundle. Delete or confine them to tests.
+> - Every number shown comes from the live API: landing hero cards = real live signals (or a real sit-out card when nothing is open), ticker strip = live quotes, stats = computed from the **live ledger** (if closed calls < 30 say so: "Live track record started <date> · N closed calls — too few to judge yet"), Proof page = live ledger only (keep Verify chain + Tamper test on the live chain, in memory).
+> - If the API is unreachable or a source is down: show an explicit state ("Live data temporarily unavailable — retrying") or the API's honest reason — never fake or cached-demo numbers. Freshness labels (real-time / 15-min delayed / end of day / daily reference) and stale warnings stay — they are honesty, not demo.
+> - Extension: no bundled-seed fallback; offline state instead. `preview.html` must render real API data (real candles on the mock host-page chart, labelled "Preview of the chip on a chart site").
+
 **Global rules**
 - **Honesty**
   - Live signals come from engine v0, which is rule-based and uncalibrated: show `ENGINE V0 · UNCALIBRATED` with a tooltip.
@@ -35,12 +43,12 @@ Read first:
 ---
 ## Part C1 — Web app user-facing integration (`web/src/**` except `web/src/admin/**`)
 1. **API layer** `web/src/api/`: a typed client (config, auth, me, profile, watchlist, tracked, alerts, notifications, support, events, consents, billing, ext link, market) plus a `useApi` stale-while-revalidate hook.
-2. **Data mode: Live (default) or Demo.**
+2. **Live data only** (see the owner directive at the top; no Demo mode).
    - `DataProvider` loads `/api/v1/market/universe` (seed-shaped), polled every 60 s. Swapping the source must keep every page working.
-   - A top-bar switch, `LIVE · BETA` / `DEMO`, persisted in localStorage. Fall back to Demo with a banner if the universe fails or has fewer than 3 instruments with data.
+   - If the universe fails, show the unavailable state with retry — never demo data.
    - Crypto and the PAXG proxy tick over `wss://data-stream.binance.vision/stream?streams=...@miniTicker`, with reconnect and backoff, closed while the tab is hidden. Everything else updates from polling.
    - **Live reveals:** when a new signal id appears between polls, run the Reveal animation on its card and toast "New signal: BTCUSDT ▲ LONG".
-   - The "Next reveal" drumroll is Demo-only. In Live, the rail shows "Engine runs every 15 min · last run N min ago" from `/api/v1/market/health`.
+   - Remove the simulated "Next reveal" drumroll; the rail shows "Engine runs every 15 min · last run N min ago" from `/api/v1/market/health`.
 3. **Instrument page in Live**
    - Chart: `/api/v1/market/candles`. Use a line series when `ohlc:false`, and offer only the supported timeframes. The last candle updates from ticks for crypto.
    - Order Flow: `/depth` (crypto); otherwise show the N/A reason.
@@ -72,7 +80,7 @@ Read first:
 11. **Pricing:** plans from config. Upgrade calls `/api/v1/billing`; if it's disabled, show "Billing isn't live yet — you're on the free plan; ask us for early access", linking to Support.
 12. **`/app/link?code=XXXX-XXXX`:** sign in if needed, then "Approve Tudumm extension on this device?" (`POST /api/v1/ext/link/approve`), then a success state.
 13. **Events:** `track(name, props)` batches events (every 10 s, on `visibilitychange` and via `sendBeacon`), keeps an anonId in localStorage and sends only allowlisted names. Wire up: page_view, instrument_view, signal_view, track_toggle, watchlist_toggle, alert_create, search, onboarding_step, onboarding_complete, plan_view, upgrade_click, extension_preview, verify_chain, tamper_test, signup_start, login, logout, support_submit, sizer_use and filter_change.
-14. **Proof:** Live ledger (the default in Live) and Demo ledger tabs.
+14. **Proof:** live ledger only.
    - Live: verify the v2 chain in the browser exactly per README-market, and compare the head with `/ledger/head`. Keep the tamper test.
    - Show "n closed calls — too few to judge" when n < 30.
 15. **Landing copy:** "Live beta on free data: crypto (real-time), US (15-min delayed), India (end of day), FX (daily reference)."
@@ -97,7 +105,7 @@ Read first:
 
 ## Part D — Chrome extension (`extension/**`, version 0.2.0)
 - **Data:**
-  - The background loads `{webUrl}/api/v1/market/universe` (cached 60 s), falling back to the bundled seed with a visible "Demo data" label.
+  - The background loads `{webUrl}/api/v1/market/universe` (cached 60 s), with an explicit offline state when unreachable (no bundled seed fallback).
   - Crypto ticks come from the Binance stream; never run the random walk in Live.
   - Freshness and engine-v0 badges.
 - **Manifest:**

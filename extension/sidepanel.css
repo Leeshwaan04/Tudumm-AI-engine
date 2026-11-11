@@ -41,21 +41,6 @@ body.sp { display: grid; grid-template-rows: auto auto minmax(0, 1fr); grid-temp
 .fchip[aria-pressed="true"] { color: var(--brand-ink); background: var(--brand); border-color: var(--brand); font-weight: 600; }
 .fchip .n { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 10.5px; opacity: .75; }
 
-/* Drumroll banner */
-.drumroll {
-  appearance: none; width: 100%; text-align: left; color: inherit; font: inherit;
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(245,184,65,.32);
-  border-radius: var(--radius);
-  background: radial-gradient(140% 120% at 0% 0%, rgba(245,184,65,.12), transparent 60%), var(--surface);
-}
-.drumroll-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 500; line-height: 1; color: var(--brand); }
-.drumroll-what { text-align: right; display: grid; gap: 2px; }
-.drumroll-what b { font-family: var(--font-mono); font-size: 13px; }
-.drumroll-what span { font-size: 11px; color: var(--text-3); }
-.drumroll.is-done { border-color: rgba(61,214,140,.35); background: var(--surface); }
-
 .group-head { display: grid; gap: 4px; margin: 6px 0 4px; }
 .group-head p { margin: 0; color: var(--text-2); font-family: var(--font-display); font-size: 16px; line-height: 1.3; }
 
@@ -77,3 +62,4 @@ body.sp { display: grid; grid-template-rows: auto auto minmax(0, 1fr); grid-temp
 
 .loading { padding: 20px 0; }
 .toasts { bottom: 16px; }
+.feed-meta { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--text-3); }

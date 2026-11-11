@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
-import { MARKET_LABEL, MARKET_ORDER, instrumentsIn } from "../engine/seed";
+import { Check, ExternalLink } from "lucide-react";
+import { useConfig } from "../api/config";
+import { consentApi } from "../api/endpoints";
+import { errorText } from "../api/client";
+import { patchMe, useSession } from "../api/session";
+import { track } from "../api/events";
+import type { Consent } from "../api/types";
+import { MARKET_LABEL, MARKET_ORDER, instrumentsIn } from "../engine/universe";
 import type { MarketId } from "../engine/types";
 import { CURRENCIES, PERSONAS, updateProfile, useProfile, type Persona, type ProfileCurrency } from "../engine/profile";
 import { fmtMoney } from "../engine/format";
@@ -15,23 +21,61 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
   const [currency, setCurrency] = useState<ProfileCurrency>(profile.currency);
   const [risk, setRisk] = useState(profile.riskPct);
   const boxRef = useRef<HTMLDivElement>(null);
+  const session = useSession();
+  const legal = useConfig().config?.legal ?? null;
+  const signedIn = session.status === "signed_in";
+  const consentOnly = initialStep === 3 && profile.onboarded;
+  const [agree, setAgree] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [consentErr, setConsentErr] = useState<string | null>(null);
 
   useEffect(() => {
     boxRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    track("onboarding_step", { step, consentOnly });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
   const cap = Number(capital.replace(/[^0-9.]/g, ""));
   const capOk = Number.isFinite(cap) && cap > 0;
-  const canNext = step === 0 ? true : step === 1 ? mkts.length > 0 : capOk && risk > 0;
+  const docs = consentDocs(legal, session.me?.pendingConsents ?? null);
+  const allAgreed = docs.every((d) => agree[d.kind]);
+  const canNext = step === 0 ? true : step === 1 ? mkts.length > 0 : step === 2 ? capOk && risk > 0 : allAgreed && !saving;
 
-  const finish = () => {
-    updateProfile({ persona, markets: mkts, capital: capOk ? cap : profile.capital, currency, riskPct: risk, onboarded: true });
+  const saveProfile = (skipped: boolean) => {
+    if (consentOnly) return;
+    if (skipped) updateProfile({ onboarded: true });
+    else updateProfile({ persona, markets: mkts, capital: capOk ? cap : profile.capital, currency, riskPct: risk, onboarded: true });
+  };
+  const finish = async () => {
+    if (signedIn) {
+      setSaving(true);
+      setConsentErr(null);
+      try {
+        let last: { consents: Consent[]; pendingConsents: { kind: string; version: string }[] } | null = null;
+        for (const d of docs) last = await consentApi.accept(d.kind, d.version);
+        if (last) patchMe({ consents: last.consents, pendingConsents: last.pendingConsents });
+      } catch (e) {
+        setConsentErr(errorText(e));
+        setSaving(false);
+        return;
+      }
+      setSaving(false);
+    }
+    saveProfile(false);
+    track("onboarding_complete", { skipped: false, signedIn, consentOnly });
     onDone();
   };
   const skip = () => {
-    updateProfile({ onboarded: true });
+    // Signed-in users must record the legal consents; skipping only skips the profile questions.
+    if (signedIn) {
+      setStep(3);
+      return;
+    }
+    saveProfile(true);
+    track("onboarding_complete", { skipped: true, signedIn });
     onDone();
   };
+  const last = 3;
 
   const toggleMarket = (m: MarketId) => setMkts((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
 
@@ -40,12 +84,16 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
       <div className="modal__box onb" role="dialog" aria-modal="true" aria-labelledby="onb-title" ref={boxRef}>
         <header className="onb__head">
           <LogoMark size={26} />
-          <div className="onb__progress mono" aria-label={`Step ${step + 1} of 3`}>
-            {[0, 1, 2].map((i) => (
-              <span key={i} className={i <= step ? "is-on" : ""} />
-            ))}
-            <b>{step + 1} / 3</b>
-          </div>
+          {consentOnly ? (
+            <span className="eyebrow">Updated terms</span>
+          ) : (
+            <div className="onb__progress mono" aria-label={`Step ${step + 1} of 4`}>
+              {[0, 1, 2, 3].map((i) => (
+                <span key={i} className={i <= step ? "is-on" : ""} />
+              ))}
+              <b>{step + 1} / 4</b>
+            </div>
+          )}
         </header>
 
         {step === 0 && (
@@ -117,7 +165,7 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
             <h2 id="onb-title" className="onb__title serif">
               How much do you <em>risk</em> per trade?
             </h2>
-            <p className="onb__lede">Used by the position sizer and the “Your risk” panel. Stored only in this browser.</p>
+            <p className="onb__lede">Used by the position sizer and the “Your risk” panel. {signedIn ? "Saved to your account." : "Stored only in this browser until you sign in."}</p>
             <div className="onb__grid">
               <label className="field">
                 <span>Trading capital</span>
@@ -160,23 +208,65 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
           </section>
         )}
 
+        {step === 3 && (
+          <section>
+            <p className="eyebrow">{consentOnly ? "Please review" : "Before you start"}</p>
+            <h2 id="onb-title" className="onb__title serif">
+              Probability, <em>not promise</em>.
+            </h2>
+            <p className="onb__lede">
+              Tudumm is in beta. Live calls come from engine v0, a rule-based engine that isn't calibrated yet, on free data that can be delayed or end-of-day. Nothing here is investment advice.
+              {signedIn ? " Your acceptance is recorded with your account." : " Signing in records your acceptance with your account."}
+            </p>
+            <div className="consents" role="group" aria-label="Legal documents">
+              {docs.map((d, i) => (
+                <label key={d.kind} className="consent">
+                  <input
+                    type="checkbox"
+                    checked={!!agree[d.kind]}
+                    onChange={(e) => setAgree((a) => ({ ...a, [d.kind]: e.target.checked }))}
+                    data-autofocus={i === 0 ? "" : undefined}
+                  />
+                  <span className="consent__txt">
+                    I've read and accept the{" "}
+                    <a href={d.href} target="_blank" rel="noreferrer" className="u-link">
+                      {d.label} <ExternalLink size={11} aria-hidden="true" />
+                    </a>
+                    <span className="consent__ver mono">version {d.version}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="onb__fine">Drafts pending legal review. You can view or withdraw consents any time in Account.</p>
+            {consentErr && (
+              <p className="form-err" role="alert">
+                {consentErr}
+              </p>
+            )}
+          </section>
+        )}
+
         <footer className="onb__foot">
-          <button type="button" className="btn btn--ghost btn--sm" onClick={skip}>
-            Skip, use defaults
-          </button>
+          {step < last && !consentOnly ? (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={skip}>
+              {signedIn ? "Skip profile questions" : "Skip, use defaults"}
+            </button>
+          ) : (
+            <span />
+          )}
           <div className="onb__nav">
-            {step > 0 && (
+            {step > 0 && !consentOnly && (
               <button type="button" className="btn" onClick={() => setStep((s) => s - 1)}>
                 Back
               </button>
             )}
-            {step < 2 ? (
+            {step < last ? (
               <button type="button" className="btn btn--primary" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>
                 Next
               </button>
             ) : (
-              <button type="button" className="btn btn--primary" disabled={!canNext} onClick={finish}>
-                Open my feed
+              <button type="button" className="btn btn--primary" disabled={!canNext} onClick={() => void finish()}>
+                {saving ? "Saving…" : consentOnly ? "Accept and continue" : "Agree and open my feed"}
               </button>
             )}
           </div>
@@ -184,4 +274,24 @@ export function Onboarding({ initialStep = 0, onDone }: { initialStep?: number; 
       </div>
     </div>
   );
+}
+
+const DOC_META: { kind: "terms" | "risk_disclosure" | "privacy"; label: string; href: string; key: "termsVersion" | "riskVersion" | "privacyVersion" }[] = [
+  { kind: "terms", label: "Terms of use", href: "/terms", key: "termsVersion" },
+  { kind: "risk_disclosure", label: "Risk disclosure", href: "/risk", key: "riskVersion" },
+  { kind: "privacy", label: "Privacy notice", href: "/privacy", key: "privacyVersion" },
+];
+
+/** The three required documents with their current versions (pending versions win when signed in). */
+function consentDocs(
+  legal: { termsVersion: string; riskVersion: string; privacyVersion: string } | null,
+  pending: { kind: string; version: string }[] | null,
+) {
+  const docs = DOC_META.map((d) => ({ ...d, version: pending?.find((p) => p.kind === d.kind)?.version ?? legal?.[d.key] ?? "draft" }));
+  // When signed in and some are already accepted, only ask for the outstanding ones.
+  if (pending && pending.length) {
+    const due = docs.filter((d) => pending.some((p) => p.kind === d.kind));
+    if (due.length) return due;
+  }
+  return docs;
 }

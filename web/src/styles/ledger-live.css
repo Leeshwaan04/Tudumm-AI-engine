@@ -1,0 +1,228 @@
+/* =========================================================
+   Proof · Live ledger (v2 chain) + Live/Demo tabs
+   ========================================================= */
+.ptabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ptabs::-webkit-scrollbar {
+  display: none;
+}
+.ptabs__tab {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  padding: 10px 18px 11px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.ptabs__tab:hover {
+  color: var(--text);
+}
+.ptabs__tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.ptabs__tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--brand);
+}
+.ptabs__lab {
+  font-family: var(--font-display);
+  font-size: 21px;
+  line-height: 1.1;
+}
+.ptabs__sub {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.ptabs__tab[aria-selected="true"] .ptabs__sub {
+  color: var(--brand);
+}
+
+.proof__panel,
+.lled {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+.lled > * {
+  min-width: 0;
+}
+
+.lled__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.lled__asof {
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* loading / error */
+.lled__state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 20px;
+  font-size: 13px;
+}
+.lled__state--err {
+  border-color: rgba(255, 92, 77, 0.45);
+  color: var(--short);
+}
+.lled__state--err > div {
+  flex: 1;
+  min-width: 0;
+}
+.lled__state--err .t2 {
+  margin-top: 2px;
+}
+.lled__state-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* "too few to judge" */
+.judge {
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.judge.is-few {
+  border-color: rgba(245, 184, 65, 0.4);
+  background:
+    radial-gradient(90% 140% at 0% 0%, rgba(245, 184, 65, 0.08), transparent 65%),
+    var(--surface);
+}
+.judge__big {
+  font-size: 28px;
+  line-height: 1.1;
+}
+.judge__big em {
+  color: var(--brand);
+}
+.judge__copy {
+  margin-top: 6px;
+  max-width: 720px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.pkpis.lled__kpis {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+/* chain heads */
+.lled__tape {
+  grid-template-columns: repeat(auto-fill, minmax(14px, 1fr));
+}
+.lled__heads {
+  display: grid;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.lled__hrow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.lled__hrow > .t3 {
+  min-width: 112px;
+}
+.lled__h {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.lled__match {
+  min-height: 1.4em;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* table */
+.lled__t td {
+  white-space: nowrap;
+}
+.lled__type {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
+}
+.lled__type--close {
+  border-color: rgba(245, 184, 65, 0.45);
+  color: var(--brand);
+}
+.oc--stopped {
+  color: var(--short);
+}
+.oc--invalidated {
+  color: var(--neutral);
+}
+
+@media (max-width: 1100px) {
+  .pkpis.lled__kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .pkpis.lled__kpis div {
+    border-bottom: 1px solid var(--line);
+  }
+  .pkpis.lled__kpis div:nth-child(4) {
+    border-left: 0;
+  }
+}
+@media (max-width: 760px) {
+  .ptabs__tab {
+    padding: 8px 14px 9px;
+  }
+  .ptabs__lab {
+    font-size: 18px;
+  }
+  .judge {
+    padding: 14px 16px;
+  }
+  .judge__big {
+    font-size: 23px;
+  }
+  .pkpis.lled__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pkpis.lled__kpis div:nth-child(4) {
+    border-left: 1px solid var(--line);
+  }
+  .pkpis.lled__kpis div:nth-child(5) {
+    border-left: 0;
+  }
+  .lled__asof {
+    margin-left: 0;
+    width: 100%;
+  }
+  .lled__hrow > .t3 {
+    min-width: 0;
+    width: 100%;
+  }
+  .lled__state {
+    flex-wrap: wrap;
+  }
+}

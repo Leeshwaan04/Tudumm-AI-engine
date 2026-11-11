@@ -62,7 +62,8 @@ export async function handleMarket(request: Request, env: Env, ctx: ExecutionCon
   try {
     switch (route) {
       case "universe":
-        return cached(request, ctx, 30, () => buildUniverse(db));
+        // 3 s: live quotes arrive every few seconds; the shared edge cache still bounds D1 reads under load
+        return cached(request, ctx, 3, () => buildUniverse(db));
       case "sources":
         return cached(request, ctx, 60, async () => {
           const h = await engineHealth(env);
@@ -124,7 +125,7 @@ export async function handleMarket(request: Request, env: Env, ctx: ExecutionCon
         ]);
         const row = rows?.[0] as unknown as SignalRow | undefined;
         if (!row) return json({ error: "not_found" }, {}, 404);
-        return json({ signal: publicSignal(row, Date.now()), events: (evs ?? []).map((e) => ({ type: e.type, at: e.at, detail: parseJson(e.detail, null) })) }, { "Cache-Control": "public, max-age=15" });
+        return json({ signal: publicSignal(row, Date.now()), events: (evs ?? []).map((e) => ({ type: e.type, at: e.at, detail: parseJson(e.detail, null) })) }, { "Cache-Control": "public, max-age=5" });
       }
     }
     // symbol routes
@@ -137,7 +138,7 @@ export async function handleMarket(request: Request, env: Env, ctx: ExecutionCon
         if (!TFS.has(tf)) return bad("tf must be one of 15m, 1H, 4H, 1D, 1W");
         const limit = intParam(p.get("limit"), 300, 1, 1000);
         if (limit === null) return bad("limit must be 1..1000");
-        return cached(request, ctx, inst.source === "binance" ? 30 : 300, () => candlesView(db, inst, tf, limit));
+        return cached(request, ctx, inst.source === "binance" || inst.market === "IN" ? 30 : 300, () => candlesView(db, inst, tf, limit));
       }
       case "depth":
         return cached(request, ctx, 5, () => depthView(db, inst));

@@ -60,9 +60,18 @@ function extensionPreview(): Plugin {
   };
 }
 
+/** Local Worker API (wrangler dev). Override with TUDUMM_API_PORT=8787 etc. */
+const API_TARGET = `http://127.0.0.1:${process.env.TUDUMM_API_PORT ?? 8789}`;
+
 export default defineConfig({
   plugins: [react(), extensionPreview()],
-  server: { port: 5180, strictPort: true },
-  preview: { port: 5180, strictPort: true },
+  server: {
+    port: 5180,
+    strictPort: true,
+    // Same-origin /api in dev so the __Host- session cookie and the API's Origin checks behave as
+    // in production. The Host header is kept (changeOrigin: false) for the same reason.
+    proxy: { "/api": { target: API_TARGET, changeOrigin: false, ws: false } },
+  },
+  preview: { port: 5180, strictPort: true, proxy: { "/api": { target: API_TARGET, changeOrigin: false } } },
   build: { chunkSizeWarningLimit: 900 },
 });

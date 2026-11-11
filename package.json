@@ -3,20 +3,25 @@
   "private": true,
   "version": "0.2.0",
   "type": "module",
-  "description": "Tudumm: multi-market signal engine \u2014 Cloudflare Worker API + web terminal + Chrome extension.",
+  "description": "Tudumm: multi-market signal engine — Cloudflare Worker API + web terminal + Chrome extension.",
   "scripts": {
     "dev:api": "wrangler dev --local --port 8787",
     "typecheck:worker": "tsc -p worker/tsconfig.json",
-    "test:worker": "node --test worker/test/",
+    "test:worker": "node --test worker/test/*.test.mjs worker/test/*.test.ts",
     "db:migrate:local": "wrangler d1 migrations apply tudumm-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply tudumm-db --remote",
     "build:site": "bash scripts/build-site.sh",
     "test:market": "node --test worker/test/market-engine.test.ts worker/test/market-analytics.test.ts",
+    "test:broker": "node --test worker/test/broker.test.ts",
+    "test:live": "node --test runner/live/*.test.ts",
+    "test:ext": "for f in extension/tests/*.test.mjs; do node \"$f\" || exit 1; done",
     "ingest": "node --experimental-strip-types runner/ingest.ts",
     "ingest:nse": "node --experimental-strip-types runner/ingest.ts nse-eod",
     "ingest:us": "node --experimental-strip-types runner/ingest.ts us-daily",
     "ingest:fx": "node --experimental-strip-types runner/ingest.ts fx-backfill",
-    "ingest:all": "node --experimental-strip-types runner/ingest.ts all"
+    "ingest:all": "node --experimental-strip-types runner/ingest.ts all",
+    "live": "node --env-file-if-exists=runner/live.env --experimental-strip-types runner/live.ts",
+    "backtest": "node --experimental-strip-types --disable-warning=ExperimentalWarning runner/backtest.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261110.1",

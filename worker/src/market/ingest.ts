@@ -45,6 +45,7 @@ export async function handleIngest(request: Request, env: Env, _ctx: ExecutionCo
   let snaps: SnapshotRow[] = [];
   let health: { source: SourceId; ok: boolean; error: string | null }[] = [];
   let runEngine: string[] = [];
+  let lifecycle = false;
   try {
     const job = body.job;
     need(typeof job === "string" && /^[a-z-]{2,20}$/.test(job), "job must be a short lowercase name");
@@ -81,6 +82,8 @@ export async function handleIngest(request: Request, env: Env, _ctx: ExecutionCo
       need(typeof s === "string" && BY_SYMBOL.has(s), "runEngine symbol unknown");
       return s as string;
     });
+    need(body.lifecycle === undefined || typeof body.lifecycle === "boolean", "lifecycle must be a boolean");
+    lifecycle = body.lifecycle === true;
   } catch (e) {
     return json({ error: "bad_request", detail: e instanceof Invalid ? e.message : "invalid body" }, {}, 400);
   }
@@ -93,12 +96,16 @@ export async function handleIngest(request: Request, env: Env, _ctx: ExecutionCo
     ...upsertSnapshots(snaps, nowIso),
     ...healthStmts(health, nowIso),
   ]);
+  // runEngine: evaluate those symbols (new completed bars) + step every open call. lifecycle: only step
+  // open calls against the fresh quotes (the live runner sends this with every quote push, so entries,
+  // stops and targets resolve within seconds instead of on the next 15-minute cron).
   let engine: unknown = null;
-  if (runEngine.length) {
+  if (runEngine.length || lifecycle) {
     const requireApproval = await readFlag(db, "require_signal_approval", false);
-    engine = await runCycle(db, { now, runBy: "ingest", evaluate: runEngine, requireApproval });
+    const memQuotes = Object.fromEntries(quotes.map((q) => [q.symbol, { price: q.price, prevClose: q.prevClose, asOf: q.asOf }]));
+    engine = await runCycle(db, { now, runBy: "ingest", evaluate: runEngine, memQuotes, requireApproval });
     await dispatchOutbox(env, db);
-    await dispatchPrices(env, db);
+    await dispatchPrices(env, db, Object.fromEntries(quotes.filter((q) => BY_SYMBOL.has(q.symbol)).map((q) => [q.symbol, q.price])));
   }
   return json({ ok: true, wrote: { candles: candles.length, quotes: quotes.length, snapshots: snaps.length, health: health.length }, engine });
 }

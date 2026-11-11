@@ -13,7 +13,8 @@ Sitting out is a first-class outcome: any layer without data is `null` with a re
 | `worker/src/cron.ts` | Cron dispatcher |
 | `worker/migrations/0002_market.sql` | Tables (independent of 0001) |
 | `runner/` | Node 25 ingest runner for heavy sources (NSE zips, Cboe history + chains, SEC) |
-| `.github/workflows/ingest.yml` | Scheduled runner on GitHub Actions |
+| `.github/workflows/ci.yml` | CI on every push to main: Worker typecheck, engine/broker/live/extension tests, Worker integration tests, web build. (There is no scheduled ingest workflow: NSE blocks GitHub-hosted runners, so `npm run ingest:nse` runs from an Indian IP.) |
+| `runner/backtest.ts` | `npm run backtest`: walk-forward replay of the production engine over the cached NSE history, with costs and confidence intervals |
 
 ## Sources (also `GET /api/v1/market/sources`)
 | Market | Source | Freshness | Runs in | Commercial use |
@@ -23,7 +24,8 @@ Sitting out is a first-class outcome: any layer without data is `null` with a re
 | Crypto sentiment | alternative.me Fear & Greed | daily | Worker (cached 3 h) | attribution; confirm terms |
 | SPY, NVDA, AAPL, TSLA, MSFT, ASML (US listing), CL (USO proxy), VIX | Cboe delayed quotes (Worker, US hours) + daily history and option chains (runner) | delayed-15m / EOD | Worker + runner | personal/non-commercial — licence needed |
 | US fundamentals | SEC EDGAR companyfacts (User-Agent `SEC_USER_AGENT`) | quarterly (weekly refresh) | runner | public domain |
-| NIFTY, BANKNIFTY, RELIANCE, HDFCBANK, TCS, INFY, ICICIBANK, SBIN | NSE archives: CM + F&O bhavcopy, `ind_close_all` | EOD | runner | NSE terms restrict commercial use — licence needed |
+| NIFTY, BANKNIFTY, RELIANCE, HDFCBANK, TCS, INFY, ICICIBANK, SBIN, India VIX | **5paisa Xstream** (owner's own account): WebSocket ticks, today's forming daily bar, daily history | **realtime** while `npm run live` runs | live runner | owner's personal use only — no redistribution |
+| NIFTY, BANKNIFTY, RELIANCE, HDFCBANK, TCS, INFY, ICICIBANK, SBIN | NSE archives: CM + F&O bhavcopy, `ind_close_all` (fallback + option chains + index P/E) | EOD | runner | NSE terms restrict commercial use — licence needed |
 | EURUSD, USDINR, USDJPY | ECB reference rates via Frankfurter | daily-ref (close only, `ohlc:false`) | Worker (daily cron) + runner backfill | free reuse |
 
 Yahoo, Stooq and the live NSE JSON APIs are **not** used.
@@ -74,7 +76,7 @@ async function verify(entries /* ascending seq, from genesis */) {
 ## Public API (all GET, JSON, `Cache-Control: public, max-age=…`)
 Symbols accept any seed alias (case-insensitive). Unknown symbol → 404 `{"error":"unknown_symbol"}`; bad params → 400 `{"error":"bad_request","detail":…}`; non-GET → 405.
 
-### `GET /api/v1/market/universe` (max-age 30)
+### `GET /api/v1/market/universe` (max-age 3)
 Same top-level shape as `shared/seed.json`: `{ meta, markets, layers, instruments[], ledger[] }`.
 ```jsonc
 {
@@ -126,7 +128,7 @@ Same top-level shape as `shared/seed.json`: `{ meta, markets, layers, instrument
 ```
 `queued` is never used in live data.
 
-### `GET /api/v1/market/candles?symbol=&tf=15m|1H|4H|1D|1W&limit=1..1000` (crypto max-age 30, else 300)
+### `GET /api/v1/market/candles?symbol=&tf=15m|1H|4H|1D|1W&limit=1..1000` (crypto and India max-age 30, else 300)
 ```jsonc
 { "symbol": "BTCUSDT", "tf": "4H", "requestedTf": "4H", "ohlc": true,
   "bars": [{ "t": 1794297600, "o": 74848.6, "h": 74890.01, "l": 74115.65, "c": 74420.01, "v": 2054.39 }],  // t = bar open, unix sec UTC, ascending
@@ -203,8 +205,17 @@ LedgerEntry: `{ seq, type: "issue"|"close", signalId, symbol, market, style, str
 
 ## Internal ingest (`POST /api/internal/ingest`)
 Bearer `INGEST_TOKEN` (constant-time compare). 503 `ingest_not_configured` when the secret is unset; 401 on a bad token; body ≤ 1 MB JSON:
-`{ job, candles?: [{symbol, tf, t, o, h, l, c, v}] (≤ 2000), quotes?: [QuoteRow] (≤ 50), snapshots?: [{key, json, asOf, source}] (≤ 50, json ≤ 256 KB), health?: [{source, ok, error?}], runEngine?: [symbols] }`.
-Symbols must be in the universe (quotes also allow `^VIX`, `INDIAVIX`); snapshot keys must match `^(deriv|depth|fund|ctx):[A-Z^]+$`. With `runEngine`, the Worker runs the engine for those symbols, then dispatches hooks.
+`{ job, candles?: [{symbol, tf, t, o, h, l, c, v}] (≤ 2000), quotes?: [QuoteRow] (≤ 50), snapshots?: [{key, json, asOf, source}] (≤ 50, json ≤ 256 KB), health?: [{source, ok, error?}], runEngine?: [symbols], lifecycle?: boolean }`.
+Symbols must be in the universe (quotes also allow `^VIX`, `INDIAVIX`); snapshot keys must match `^(deriv|depth|fund|ctx):[A-Z^]+$`. With `runEngine`, the Worker runs the engine for those symbols (and steps every open call); with `lifecycle: true` alone it only steps open calls against the pushed quotes. Either way it then dispatches signal hooks and price alerts.
+
+## Live feed (`npm run live`, `runner/live.ts`)
+A long-running Node process (your Mac or the Kite relay's VPS) that makes calls refresh in near-realtime. It never places orders; orders go through Zerodha Kite (`relay/kite-relay.mjs`) after owner confirmation.
+- **India (5paisa):** TOTP login at startup and 08:45 IST on weekdays (token valid to 23:59 IST) → scrip master (cached per day in `runner/.cache/5paisa/`) → daily history backfill (600 days first run, 10 days after) → `MarketFeedV3` WebSocket 09:00–15:35 IST. A REST `V1/MarketFeed` fallback covers any scrip quiet for 20 s. Pushes changed quotes every `PUSH_MS_IN` (5 s), a heartbeat of all quotes and today's forming 1D bars every 60 s (only while the stream is alive), the final bars at 15:36 and `runEngine` for India at 16:01 IST (closeOffset 16:00). India VIX → `INDIAVIX` quote + `ctx:IN` history. Two refused logins pause India so a wrong PIN can't lock the account.
+- **Crypto:** the Worker's own `cryptoJob` (klines, depth, perp funding/OI, F&G) run from this machine's egress every `CRYPTO_JOB_MS` (5 min) and just after each 4H boundary (evaluates the completed bar), plus a one-call ticker refresh every `PUSH_MS_CRYPTO` (15 s). While it runs, the */15 cron skips its own crypto fetch (Binance/Bybit refuse some Cloudflare egress) and only evaluates.
+- **Every push sends `lifecycle: true`**, so open calls step through entry → T1 → T2/stop within seconds, and price alerts fire on fresh prices.
+- Freshness is labelled by what actually served the quote: 5paisa quotes are `realtime` (stale after 2 min without a push during the NSE session; outside it the last close stays valid for 4 days); otherwise the NSE EOD fallback stays `eod`.
+- Config: `runner/live.env` (template `runner/live.env.example`, git-ignored). `--once` (backfill + one push, then exit), `--dry-run` (send nothing), `--no-india`, `--no-crypto`. Tests: `npm run test:live`.
+- D1 budget at the defaults: roughly 40–60k rows written per day, under the Workers Free plan's 100k/day.
 
 ## Cron (`wrangler.jsonc` triggers)
 - `*/15 * * * *`: Binance (tickers, 4H klines ×4, depth ×4, perp funding/OI ×3 with Bybit fallback, Fear & Greed when > 3 h old), Cboe delayed quotes + VIX (US hours, or when no quote exists yet), engine for crypto/PAXG when a new 4H bar completes, up to 2 daily instruments whose newest completed bar hasn't been evaluated, lifecycle for every open signal, then the hook outbox (`onSignalEvent`) and `onPricesUpdated`. Kill switch: `feature_flags.live_data = 0` skips fetching.

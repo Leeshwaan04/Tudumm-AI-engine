@@ -12,6 +12,9 @@ import "./styles/app.css";
 import "./styles/instrument.css";
 import "./styles/landing.css";
 import "./styles/pages.css";
+import "./styles/live.css";
+import "./styles/account.css";
+import "./styles/ledger-live.css";
 import { App } from "./App";
 
 createRoot(document.getElementById("root")!).render(

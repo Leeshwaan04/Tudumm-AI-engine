@@ -1,6 +1,6 @@
 import { rng } from "./prng";
 import type { Instrument, MarketId } from "./types";
-import { getInstrument } from "./seed";
+import { getInstrument } from "./universe";
 
 /** All headlines are SIMULATED and labelled as such in the UI. */
 export type Sentiment = "bullish" | "bearish" | "neutral";

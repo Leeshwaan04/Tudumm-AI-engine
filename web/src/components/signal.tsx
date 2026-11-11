@@ -1,5 +1,5 @@
 import type { Direction, Instrument, LayerScores, LiveStatus, TradeSignal } from "../engine/types";
-import { LAYER_LABEL, LAYER_ORDER, LAYER_SHORT, agreement, entryMid, rAt } from "../engine/seed";
+import { LAYER_LABEL, LAYER_ORDER, LAYER_SHORT, agreement, entryMid, rAt } from "../engine/universe";
 import { fmtPrice, fmtSignedPct, fmtLevel, MINUS } from "../engine/format";
 import { useTick } from "../engine/live";
 import { useReducedMotion } from "./hooks";
@@ -20,7 +20,6 @@ export const STATUS_LABEL: Record<LiveStatus, string> = {
   pending: "Entry pending",
   t1_hit: "T1 hit · stop at breakeven",
   sit_out: "Sitting out",
-  queued: "Revealing…",
 };
 export function StatusPill({ status }: { status: LiveStatus }) {
   return (

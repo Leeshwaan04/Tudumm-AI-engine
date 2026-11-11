@@ -1,13 +1,12 @@
-// Tudumm extension engine: seed loading, alias resolution, URL/title symbol
-// detection, the live tick simulation, and formatting.
+// Tudumm extension engine: alias resolution, URL/title symbol detection, live
+// quotes, signal geometry, sizing and formatting over the market universe from
+// the Tudumm API (GET /api/v1/market/universe).
 //
 // Pure ES module with no Chrome API calls, so it runs unchanged in the
 // background service worker, the extension pages, preview mode and Node (tests).
 //
-// Live prices are a deterministic function of wall-clock time: every surface
-// (popup, side panel, content chip via the background) computes the same price
-// at the same moment without a long-running timer, which matters because MV3
-// service workers are suspended when idle.
+// There is no made-up data anywhere: prices change only when real data
+// arrives (a universe refresh or a Binance tick). No data → an honest "—".
 
 export const LAYERS = [
   { id: "price", label: "Price & Structure", short: "Price" },
@@ -31,8 +30,12 @@ export const SITES = [
   { key: "moneycontrol", label: "Moneycontrol", host: "www.moneycontrol.com", match: "https://www.moneycontrol.com/*", mode: "title", example: "https://www.moneycontrol.com/india/stockpricequote/refineries/relianceindustries/RI" },
 ];
 
+export const PRODUCTION_WEB_URL = "https://tudumm.in";
+/** Tudumm web origins the manifest grants host access to (no CORS needed for these). */
+export const TUDUMM_ORIGINS = Object.freeze(["https://tudumm.in", "https://tudumm-ai-engine.sumitbagewadi6.workers.dev"]);
+
 export const DEFAULT_SETTINGS = Object.freeze({
-  webUrl: "http://localhost:5180",
+  webUrl: PRODUCTION_WEB_URL,
   capital: 500000,
   currency: "INR",
   riskPct: 1,
@@ -41,7 +44,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export function mergeSettings(stored) {
-  const s = stored && typeof stored === "object" ? stored : {};
+  // `dataMode` (Live/Demo) was a v0.2 draft setting: there is no demo mode, so a stored value is dropped.
+  const { dataMode: _legacy, ...s } = stored && typeof stored === "object" ? stored : {};
   return {
     ...DEFAULT_SETTINGS,
     ...s,
@@ -49,7 +53,16 @@ export function mergeSettings(stored) {
   };
 }
 
-/** Returns a normalized http(s) base URL, or null for anything else (javascript:, data:, file:, junk). */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export function isLoopbackHost(hostname) {
+  return LOOPBACK.has(String(hostname || "").toLowerCase());
+}
+
+/**
+ * Returns a normalized base URL, or null for anything else (javascript:, data:, file:, junk).
+ * Production rule: https only. Plain http is accepted only for this machine
+ * (localhost / 127.0.0.1 / [::1]) so a local dev server can be used.
+ */
 export function safeWebUrl(value) {
   if (typeof value !== "string" || value.length > 2048) return null;
   let u;
@@ -58,9 +71,97 @@ export function safeWebUrl(value) {
   } catch {
     return null;
   }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHost(u.hostname))) return null;
   if (!u.hostname || u.username || u.password) return null;
   return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+}
+
+/** Why a web URL was refused, for the Options page. null when it's fine. */
+export function webUrlProblem(value) {
+  if (safeWebUrl(value)) return null;
+  let u;
+  try {
+    u = new URL(String(value || "").trim());
+  } catch {
+    return "Enter a full address, e.g. https://tudumm.in";
+  }
+  if (u.protocol === "http:") return "Use https:// (plain http is allowed only for localhost while developing).";
+  return "Enter an https:// address, e.g. https://tudumm.in";
+}
+
+/** The API origin for a web URL (the API is served by the same origin as the web app). */
+export function apiOrigin(webUrl) {
+  const base = safeWebUrl(webUrl);
+  return base ? new URL(base).origin : null;
+}
+
+// ------------------------------------------------- Freshness & honesty --
+
+export const FRESHNESS_TEXT = {
+  realtime: "REAL-TIME",
+  "delayed-15m": "DELAYED 15M",
+  eod: "END OF DAY",
+  "daily-ref": "DAILY REF",
+};
+export const FRESHNESS_SHORT = { realtime: "RT", "delayed-15m": "15M", eod: "EOD", "daily-ref": "REF" };
+export const FRESHNESS_HELP = {
+  realtime: "Streams in real time from the exchange's public feed.",
+  "delayed-15m": "Quotes are delayed by about 15 minutes.",
+  eod: "End-of-day data, published after the session closes.",
+  "daily-ref": "One reference rate per business day (no intraday ticks).",
+};
+const SOURCE_TEXT = {
+  binance: "BINANCE",
+  "binance-futures": "BINANCE",
+  bybit: "BYBIT",
+  cboe: "CBOE",
+  "nse-archives": "NSE",
+  "ecb-frankfurter": "ECB",
+  "sec-edgar": "SEC",
+  "alternative-me": "ALTERNATIVE.ME",
+};
+const PROXY_TEXT = { XAUUSD: "PAXG PROXY FOR GOLD", CL: "USO ETF PROXY FOR WTI", ASML: "ASML ADR (NASDAQ)" };
+
+export const ENGINE_TAG = "ENGINE V0 · UNCALIBRATED";
+export const ENGINE_HELP =
+  "Live signals come from engine v0: fixed rules over price, flow, derivatives, fundamentals and context. Its confidence is a rule score that hasn't been calibrated against outcomes yet, so 70% doesn't mean 7 in 10 calls work out. Read it as a ranking.";
+
+/** "REAL-TIME · BINANCE", or null when the API didn't say. */
+export function freshnessText(inst) {
+  if (!inst || !inst.freshness) return null;
+  const f = FRESHNESS_TEXT[inst.freshness] || String(inst.freshness).toUpperCase().slice(0, 16);
+  const src = SOURCE_TEXT[inst.source] || (inst.source ? String(inst.source).toUpperCase().slice(0, 16) : "");
+  return src ? `${f} · ${src}` : f;
+}
+
+export function proxyText(inst) {
+  if (inst && inst.symbol === "XAUUSD" && inst.source === "bybit") return "XAUT PROXY FOR GOLD";
+  return (inst && PROXY_TEXT[inst.symbol]) || null;
+}
+
+const PAXG_NOTE = "PAXG (Paxos Gold) on Binance: tokenized gold used as a proxy for spot gold.";
+
+/** The Binance pair a live instrument streams from, or null (crypto in real time, and gold via PAXG). */
+export function binanceStreamPair(inst) {
+  if (!inst || !inst.live) return null;
+  if (inst.symbol === "XAUUSD") return "PAXGUSDT";
+  if (inst.source === "binance" || (inst.assetClass === "crypto" && inst.freshness === "realtime")) {
+    const pair = String(inst.dataSymbol || inst.symbol).toUpperCase();
+    return /^[A-Z0-9]{5,20}$/.test(pair) ? pair : null;
+  }
+  return null;
+}
+
+/** "as of 14:32" today, "as of 7 Nov" otherwise. */
+export function asOfText(iso, now = Date.now()) {
+  if (iso == null || iso === "") return null;
+  const t = typeof iso === "string" ? Date.parse(iso) : Number(iso);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  const d = new Date(t);
+  const n = new Date(now);
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  if (sameDay) return `as of ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `as of ${d.getDate()} ${d.toLocaleString("en-US", { month: "short" })}`;
 }
 
 /** `{webUrl}/app/i/{SYMBOL}` (or `/app`), or null when webUrl is not a valid http(s) URL. */
@@ -70,37 +171,6 @@ export function terminalUrl(webUrl, symbol, path) {
   if (path) return `${base}${path}`;
   return symbol ? `${base}/app/i/${encodeURIComponent(symbol)}` : `${base}/app`;
 }
-
-// ---------------------------------------------------------------- PRNG ----
-
-export function hashString(str) {
-  // FNV-1a 32-bit
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-export function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function next() {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function gaussianAt(seed, k) {
-  const rnd = mulberry32((seed ^ Math.imul(k | 0, 0x9e3779b1)) >>> 0);
-  const u1 = Math.max(rnd(), 1e-12);
-  const u2 = rnd();
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-}
-
-// ----------------------------------------------------------- Formatting --
 
 const CURRENCIES = {
   INR: { prefix: "₹", suffix: "", locale: "en-IN" },
@@ -195,7 +265,6 @@ export const STATUS_TEXT = {
   pending: "ENTRY PENDING",
   t1_hit: "T1 HIT · STOP AT BREAKEVEN",
   sit_out: "SITTING OUT",
-  queued: "REVEALING…",
 };
 
 export const REGIME_TEXT = {
@@ -209,38 +278,16 @@ export const STYLE_TEXT = { intraday: "Intraday", swing: "Swing", positional: "P
 
 // Why a layer is N/A for an asset class, and what Tudumm uses instead.
 export function naReason(inst, layerId) {
-  if (layerId === "flow" && inst.assetClass === "fx") {
-    return "Spot FX trades OTC, so there is no consolidated order book. Tudumm reads CME futures volume and positioning instead.";
-  }
-  if (layerId === "fundamentals" && inst.assetClass === "crypto") {
-    return "Not applicable. Tudumm will use on-chain flows here.";
-  }
-  return "No reliable data for this layer on this instrument yet.";
-}
-
-// --------------------------------------------------------- Seed loading --
-
-export async function loadSeed(url, attempts = 3) {
-  const target = url || new URL("../data/seed.json", import.meta.url);
-  let lastErr = null;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const res = await fetch(target);
-      if (!res.ok) throw new Error(`Seed load failed (${res.status})`);
-      return await res.json();
-    } catch (err) {
-      lastErr = err;
-      await new Promise((r) => setTimeout(r, 200 * (i + 1)));
-    }
-  }
-  throw lastErr || new Error("Seed load failed");
+  const note = inst.signal && inst.signal.layerNotes && inst.signal.layerNotes[layerId];
+  if (typeof note === "string" && note.trim()) return note.trim().slice(0, 400);
+  return "No data for this layer on this instrument yet.";
 }
 
 const upper = (s) => String(s || "").trim().toUpperCase();
 const compact = (s) => upper(s).replace(/[^A-Z0-9]/g, "");
 const isTickerLike = (s) => /^[A-Z0-9^.][A-Z0-9._\-!^=&:/ ]{0,24}$/.test(upper(s));
 
-// Extra phrases for title-only sites. These are matching hints, not seed data.
+// Extra phrases for title-only sites. These are matching hints, not market data.
 const TITLE_HINTS = {
   BANKNIFTY: ["BANK NIFTY"],
   XAUUSD: ["XAU/USD", "GOLD SPOT", "GOLD FUTURES"],
@@ -260,12 +307,108 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ------------------------------------------------------ Normalization --
+
+const KNOWN_STATUSES = new Set(["active", "pending", "t1_hit", "sit_out"]);
+const fin = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const text = (v, max = 600) => (typeof v === "string" ? v.slice(0, max) : null);
+
+/**
+ * A signal the UI can always draw. Unknown statuses (held, closed, invalidated…)
+ * and setups with broken levels become an honest "sitting out".
+ */
+export function normalizeSignal(raw, inst) {
+  const s = raw && typeof raw === "object" ? raw : null;
+  const layers = {};
+  for (const l of LAYERS) {
+    const v = s && s.layers ? fin(s.layers[l.id]) : null;
+    layers[l.id] = v == null ? null : Math.max(-100, Math.min(100, Math.round(v)));
+  }
+  if (!s) {
+    return { id: `SIT-${inst.symbol}`, status: "sit_out", regime: "range", issuedMinutesAgo: 0, layers, layerNotes: {}, thesis: "No signal for this instrument yet.", invalidation: null, direction: null, confidence: null };
+  }
+  const status = KNOWN_STATUSES.has(s.status) ? s.status : "sit_out";
+  const out = {
+    ...s,
+    id: text(s.id, 64) || `SIG-${inst.symbol}`,
+    status,
+    regime: text(s.regime, 32) || "range",
+    issuedMinutesAgo: fin(s.issuedMinutesAgo) ?? 0,
+    layers,
+    layerNotes: s.layerNotes && typeof s.layerNotes === "object" ? s.layerNotes : {},
+    thesis: text(s.thesis) || "",
+    invalidation: text(s.invalidation),
+  };
+  if (status === "sit_out") return { ...out, direction: null, confidence: null };
+  const lv = { entryLow: fin(s.entryLow), entryHigh: fin(s.entryHigh), stop: fin(s.stop), target1: fin(s.target1), target2: fin(s.target2) };
+  const dir = s.direction === "LONG" ? 1 : s.direction === "SHORT" ? -1 : 0;
+  const ok = dir && Object.values(lv).every((v) => v != null) && lv.entryHigh >= lv.entryLow;
+  const mid = ok ? (lv.entryLow + lv.entryHigh) / 2 : 0;
+  const risk = ok ? dir * (mid - lv.stop) : 0;
+  if (!ok || !(risk > 0) || !(dir * (lv.target2 - mid) > 0) || !(dir * (lv.target1 - mid) > 0)) {
+    return { ...out, status: "sit_out", direction: null, confidence: null, thesis: out.thesis || "The published levels didn't check out, so Tudumm isn't showing this setup." };
+  }
+  const conf = fin(s.confidence);
+  return {
+    ...out,
+    ...lv,
+    direction: s.direction,
+    confidence: conf == null ? 0.5 : Math.max(0, Math.min(1, conf)),
+    rr1: fin(s.rr1) ?? Math.round(((dir * (lv.target1 - mid)) / risk) * 100) / 100,
+    rr2: fin(s.rr2) ?? Math.round(((dir * (lv.target2 - mid)) / risk) * 100) / 100,
+  };
+}
+
 // ---------------------------------------------------------------- Engine --
 
-export function createEngine(seed, options = {}) {
+/** createEngine(universe) over the API's market universe (already sanitized). */
+export function createEngine(universe, options = {}) {
   const loadedAt = options.loadedAt ?? Date.now();
-  const instruments = seed.instruments;
+  const live = true;
+  const instruments = (universe.instruments || []).map((i) => ({ ...i, live: true, signal: normalizeSignal(i.signal, i) }));
   const bySymbol = new Map(instruments.map((i) => [i.symbol, i]));
+
+  // Quotes change only when real data arrives: a universe refresh or a Binance tick.
+  const liveQ = new Map();
+  for (const i of instruments) liveQ.set(i.symbol, { price: fin(i.price) && i.price > 0 ? i.price : null, prev: null, tick: 0, at: Date.parse(i.asOf) || null });
+  function setQuote(symbol, { price, at = Date.now(), source = null } = {}) {
+    const q = liveQ.get(symbol);
+    const inst = bySymbol.get(symbol);
+    if (!q || !inst || !(fin(price) && price > 0)) return false;
+    if (q.at && at < q.at) return false; // never overwrite a newer price with an older one
+    // The badge names the venue that served the latest price (e.g. a Binance tick
+    // on top of a Bybit-sourced universe quote).
+    if (source && typeof source === "string" && source !== inst.source) {
+      inst.source = source.slice(0, 32);
+      if (symbol === "XAUUSD") inst.proxyNote = inst.source === "binance" ? PAXG_NOTE : inst.proxyNote;
+    }
+    q.at = at;
+    inst.asOf = new Date(at).toISOString();
+    inst.stale = false;
+    inst.hasData = true;
+    if (q.price === price) return false;
+    q.prev = q.price;
+    q.price = price;
+    q.tick += 1;
+    inst.price = price;
+    return true;
+  }
+  /** Fold a fresh universe's quotes into this engine (used when no signal changed). */
+  function applyQuotes(universe) {
+    let n = 0;
+    for (const fresh of (universe && universe.instruments) || []) {
+      const inst = bySymbol.get(fresh.symbol);
+      if (!inst) continue;
+      if (fin(fresh.prevClose) != null) inst.prevClose = fresh.prevClose;
+      if (fin(fresh.changePct) != null) inst.changePct = fresh.changePct;
+      const at = Date.parse(fresh.asOf);
+      if (Number.isFinite(at)) {
+        if (setQuote(fresh.symbol, { price: fresh.price, at, source: fresh.source || null })) n++;
+        inst.stale = !!fresh.stale && (liveQ.get(fresh.symbol)?.at ?? 0) <= at;
+      }
+    }
+    return n;
+  }
   const exact = new Map();
   const compactIdx = new Map();
   for (const inst of instruments) {
@@ -351,42 +494,6 @@ export function createEngine(seed, options = {}) {
     return scored.slice(0, limit).map((s) => s.inst);
   }
 
-  // ---------------------------------------------------- Live simulation --
-
-  const sim = new Map();
-  for (const inst of instruments) {
-    const seedN = hashString(inst.symbol);
-    const rnd = mulberry32(seedN);
-    const period = 1200 + Math.floor(rnd() * 800); // 1.2–2.0s per instrument
-    const phase = Math.floor(rnd() * period);
-    const sigma = inst.assetClass === "fx" ? 0.0001 : inst.assetClass === "crypto" ? 0.0008 : 0.0003;
-    sim.set(inst.symbol, { seedN, period, phase, sigma, cache: new Map() });
-  }
-  const PHI = 0.98;
-  const TERMS = 260; // PHI^260 ≈ 0.005, so the truncated sum is effectively exact
-
-  function tickIndex(symbol, t) {
-    const s = sim.get(symbol);
-    return Math.floor((t - s.phase) / s.period);
-  }
-
-  function rawAt(symbol, k) {
-    const s = sim.get(symbol);
-    const hit = s.cache.get(k);
-    if (hit !== undefined) return hit;
-    let x = 0;
-    let w = 1;
-    for (let j = 0; j < TERMS; j++) {
-      x += w * gaussianAt(s.seedN, k - j);
-      w *= PHI;
-    }
-    const inst = bySymbol.get(symbol);
-    const raw = inst.price * (1 + s.sigma * x);
-    if (s.cache.size >= 6) s.cache.delete(s.cache.keys().next().value);
-    s.cache.set(k, raw);
-    return raw;
-  }
-
   function geometry(sig) {
     if (sig.entryLow == null) return null;
     const mid = (sig.entryLow + sig.entryHigh) / 2;
@@ -395,85 +502,42 @@ export function createEngine(seed, options = {}) {
     return { mid, sign, risk };
   }
 
-  const revealCache = new Map();
-  /** Effective status at time t, relative to this surface's load time. */
-  function signalState(symbol, t = Date.now(), at = loadedAt) {
+  /** A signal's state as published by the API (no client-side reveals or simulation). */
+  function signalState(symbol) {
+    const sig = bySymbol.get(symbol).signal;
+    const issued = Date.parse(sig.issuedAt);
+    return { status: sig.status, issuedAt: Number.isFinite(issued) ? issued : loadedAt - sig.issuedMinutesAgo * 60000 };
+  }
+
+  /** The latest real price, or null when the API has none. */
+  function priceAt(symbol) {
+    return liveQ.get(symbol)?.price ?? null;
+  }
+
+  function liveQuote(symbol, t, at) {
     const inst = bySymbol.get(symbol);
-    const sig = inst.signal;
-    if (sig.status !== "queued") {
-      return { status: sig.status, issuedAt: at - sig.issuedMinutesAgo * 60000, revealAt: null, secondsToReveal: 0, revealedFromQueue: false };
-    }
-    const revealAt = at + (sig.revealAfterSec ?? 30) * 1000;
-    if (t < revealAt) {
-      return { status: "queued", issuedAt: null, revealAt, secondsToReveal: (revealAt - t) / 1000, revealedFromQueue: false };
-    }
-    const key = `${symbol}@${revealAt}`;
-    let st = revealCache.get(key);
-    if (!st) {
-      const p = rawAt(symbol, tickIndex(symbol, revealAt));
-      const inZone = p >= sig.entryLow && p <= sig.entryHigh;
-      st = { status: inZone ? "active" : "pending", side: p > sig.entryHigh ? 1 : -1 };
-      revealCache.set(key, st);
-    }
-    return { status: st.status, issuedAt: revealAt, revealAt, secondsToReveal: 0, revealedFromQueue: true, pendingSide: st.side };
-  }
-
-  function reflect(p, lo, hi) {
-    if (lo != null && p < lo) p = lo + (lo - p);
-    if (hi != null && p > hi) p = hi - (p - hi);
-    if (lo != null && p < lo) p = lo;
-    if (hi != null && p > hi) p = hi;
-    return p;
-  }
-
-  function clampFor(inst, state, p) {
-    const sig = inst.signal;
-    const g = geometry(sig);
-    if (!g) return p;
-    const st = state.status;
-    if (st === "active" || st === "t1_hit") {
-      const m = g.risk * 0.12;
-      const stopLevel = st === "t1_hit" ? g.mid : sig.stop;
-      if (g.sign > 0) return reflect(p, stopLevel + m, sig.target2 - m);
-      return reflect(p, sig.target2 + m, stopLevel - m);
-    }
-    if (st === "pending") {
-      const mz = (sig.entryHigh - sig.entryLow) * 0.15 + inst.price * 0.00005;
-      const side = state.pendingSide ?? (inst.price > sig.entryHigh ? 1 : -1);
-      return side > 0 ? reflect(p, sig.entryHigh + mz, null) : reflect(p, null, sig.entryLow - mz);
-    }
-    return p;
-  }
-
-  function priceAt(symbol, t = Date.now(), at = loadedAt) {
-    const inst = bySymbol.get(symbol);
-    const k = tickIndex(symbol, t);
-    const state = signalState(symbol, t, at);
-    const p = clampFor(inst, state, rawAt(symbol, k));
-    const f = Math.pow(10, inst.decimals);
-    return Math.round(p * f) / f;
+    const q = liveQ.get(symbol);
+    const price = q.price;
+    const prevPrice = q.prev ?? price;
+    const g = geometry(inst.signal);
+    const pc = fin(inst.prevClose) && inst.prevClose > 0 ? inst.prevClose : null;
+    const changePct = price != null && pc ? (price - pc) / pc : fin(inst.changePct) != null ? inst.changePct / 100 : null;
+    return {
+      symbol,
+      tick: q.tick,
+      price,
+      prevPrice,
+      dir: price != null && prevPrice != null ? (price > prevPrice ? 1 : price < prevPrice ? -1 : 0) : 0,
+      change: price != null && pc ? price - pc : null,
+      changePct,
+      r: g && price != null ? (g.sign * (price - g.mid)) / g.risk : null,
+      state: signalState(symbol),
+      at: q.at,
+    };
   }
 
   function quote(symbol, t = Date.now(), at = loadedAt) {
-    const inst = bySymbol.get(symbol);
-    const k = tickIndex(symbol, t);
-    const price = priceAt(symbol, t, at);
-    const s = sim.get(symbol);
-    const prevPrice = priceAt(symbol, t - s.period, at);
-    const state = signalState(symbol, t, at);
-    const g = geometry(inst.signal);
-    const r = g ? (g.sign * (price - g.mid)) / g.risk : null;
-    return {
-      symbol,
-      tick: k,
-      price,
-      prevPrice,
-      dir: price > prevPrice ? 1 : price < prevPrice ? -1 : 0,
-      change: price - inst.prevClose,
-      changePct: (price - inst.prevClose) / inst.prevClose,
-      r,
-      state,
-    };
+    return liveQuote(symbol, t, at);
   }
 
   /** Trade Map geometry, R-oriented: stop on the left, target 2 on the right. */
@@ -510,10 +574,8 @@ export function createEngine(seed, options = {}) {
     return { rows, agree, total: scored.length, na: rows.length - scored.length };
   }
 
-  function issuedText(symbol, t = Date.now(), at = loadedAt) {
-    const st = signalState(symbol, t, at);
-    if (st.status === "queued") return "queued";
-    return formatAgo(t - st.issuedAt);
+  function issuedText(symbol, t = Date.now()) {
+    return formatAgo(t - signalState(symbol).issuedAt);
   }
 
   /** Everything a surface needs to draw a signal, as plain serializable data. */
@@ -524,9 +586,19 @@ export function createEngine(seed, options = {}) {
     const q = quote(symbol, t, at);
     const st = q.state;
     const isSit = sig.status === "sit_out";
-    const live = st.status === "active" || st.status === "t1_hit";
+    const inTrade = st.status === "active" || st.status === "t1_hit";
     return {
       symbol,
+      live: true,
+      freshness: inst.freshness || null,
+      freshnessText: freshnessText(inst),
+      freshnessShort: FRESHNESS_SHORT[inst.freshness] || null,
+      freshnessHelp: [FRESHNESS_HELP[inst.freshness], inst.proxyNote].filter(Boolean).join(" ") || null,
+      proxyText: proxyText(inst),
+      asOfText: asOfText(q.at ?? inst.asOf, t),
+      stale: !!inst.stale,
+      hasPrice: q.price != null,
+      engineText: ENGINE_TAG,
       name: inst.name,
       exchange: inst.exchange,
       market: inst.market,
@@ -535,8 +607,6 @@ export function createEngine(seed, options = {}) {
       id: sig.id,
       status: st.status,
       statusText: STATUS_TEXT[st.status],
-      secondsToReveal: st.secondsToReveal,
-      countdown: st.status === "queued" ? formatCountdown(st.secondsToReveal) : null,
       direction: sig.direction || null,
       confidence: sig.confidence ?? null,
       confidencePct: sig.confidence == null ? null : Math.round(sig.confidence * 100),
@@ -550,8 +620,8 @@ export function createEngine(seed, options = {}) {
       tickDir: q.dir,
       changePct: q.changePct,
       changeText: formatPct(q.changePct),
-      r: live ? q.r : null,
-      rText: live ? formatR(q.r) : null,
+      r: inTrade ? q.r : null,
+      rText: inTrade && q.r != null ? formatR(q.r) : null,
       levels: isSit
         ? null
         : {
@@ -590,6 +660,9 @@ export function createEngine(seed, options = {}) {
     if (!g || !(capital > 0) || !(riskPct > 0)) return null;
     const riskCap = capital * (riskPct / 100);
     const riskInst = convert(riskCap, currency, inst.currency, t);
+    if (!(Number.isFinite(riskInst) && riskInst > 0)) {
+      return { unavailable: `No live ${currency}→${inst.currency} rate yet, so Tudumm can't convert your capital. Set the capital currency to ${inst.currency === "USDT" ? "USD" : inst.currency} in Options to size this trade.` };
+    }
     const perUnit = g.risk;
     let qty = riskInst / perUnit;
     const fractional = inst.assetClass === "crypto";
@@ -599,7 +672,7 @@ export function createEngine(seed, options = {}) {
     const fxNote =
       currency === inst.currency || (currency === "USD" && inst.currency === "USDT") || (currency === "USDT" && inst.currency === "USD")
         ? null
-        : `Converted ${currency}→${inst.currency} at simulated rates.`;
+        : `Converted ${currency}→${inst.currency} at the latest ECB reference rate.`;
     return {
       riskCap,
       riskInst,
@@ -618,7 +691,9 @@ export function createEngine(seed, options = {}) {
   }
 
   function ledgerStats() {
-    const L = seed.ledger || [];
+    const all = Array.isArray(universe.ledger) ? universe.ledger : [];
+    // Live ledger v2 mixes "issue" and "close" entries: stats come from closed calls only.
+    const L = all.filter((e) => e && e.type === "close" && fin(e.r) != null);
     const wins = L.filter((e) => e.r > 0);
     const losses = L.filter((e) => e.r <= 0);
     const sum = (a) => a.reduce((s, e) => s + e.r, 0);
@@ -641,22 +716,29 @@ export function createEngine(seed, options = {}) {
       profitFactor: grossLoss ? grossWin / grossLoss : null,
       totalR: cum,
       maxDrawdown: mdd,
-      head: L.length ? L[L.length - 1].hash : null,
+      head: all.length ? all[all.length - 1].hash : null,
+      entries: all.length,
+      live,
+      tooFew: L.length < 30,
     };
   }
 
   return {
-    seed,
+    universe,
+    live,
     loadedAt,
     instruments,
-    markets: seed.markets,
+    setQuote,
+    applyQuotes,
+    /** Changes whenever a signal is added, removed or changes state: then surfaces re-render. */
+    signalKey: () => instruments.map((i) => `${i.symbol}:${i.signal.id}:${i.signal.status}:${i.signal.confidence ?? ""}:${i.signal.stopCurrent ?? ""}`).join("|"),
+    markets: universe.markets || [],
     get: (s) => bySymbol.get(s) || null,
     resolve,
     detect,
     search,
     priceAt,
     quote,
-    tickIndex,
     signalState,
     tradeMap,
     confluence,
@@ -665,7 +747,6 @@ export function createEngine(seed, options = {}) {
     sizePosition,
     convert,
     ledgerStats,
-    periodOf: (s) => sim.get(s)?.period ?? 1600,
   };
 }
 

@@ -23,6 +23,10 @@ export interface LifecycleSignal {
   pendingBars: number; // max completed bars a pending entry waits before it expires unfilled
   barsElapsed: number; // completed bars after issue processed so far
   checkedThroughT: number | null; // open time of the last COMPLETED bar processed
+  /** Watermark of the still-forming bar already applied (open time + the high/low seen so far). */
+  formingT?: number | null;
+  formingHigh?: number | null;
+  formingLow?: number | null;
   activatedAt: string | null;
   t1At: string | null;
   closedAt: string | null;
@@ -100,12 +104,19 @@ function touch(s: LifecycleSignal, b: Candle, at: string, out: Transition[]): vo
 /**
  * Advance a signal with the bars after its issue bar (oldest first; the last one may still be forming)
  * and the latest price. Idempotent for already-processed bars. Returns the transitions that happened.
+ *
+ * A bar is complete once its session has closed (`closeOffsetSec` after its open time; defaults to the
+ * timeframe, i.e. the next bar's open), the same rule the engine uses for completed bars.
+ * A forming bar can be stepped many times (live quotes every few seconds). Each pass applies only the
+ * part of its range made since the previous pass (formingT/High/Low watermark), so a high or low
+ * printed BEFORE an activation or T1 is never counted again after it.
  */
 export function stepLifecycle(
   sig: LifecycleSignal,
   bars: readonly Candle[],
   lastPrice: number | null,
   nowSec: number,
+  closeOffsetSec?: number,
 ): { signal: LifecycleSignal; transitions: Transition[] } {
   const s: LifecycleSignal = { ...sig };
   const out: Transition[] = [];
@@ -115,9 +126,30 @@ export function stepLifecycle(
     if (s.status === "closed") break;
     if (b.t <= s.issuedBarT) continue;
     if (s.checkedThroughT !== null && b.t <= s.checkedThroughT) continue;
-    const complete = b.t + s.tfSec <= nowSec;
-    touch(s, b, nowIso, out);
-    if (!complete) continue;
+    const complete = b.t + (closeOffsetSec ?? s.tfSec) <= nowSec;
+    const seen = s.formingT === b.t && typeof s.formingHigh === "number" && typeof s.formingLow === "number";
+    if (!seen) touch(s, b, nowIso, out);
+    else {
+      const hi0 = s.formingHigh as number;
+      const lo0 = s.formingLow as number;
+      const newHi = b.h > hi0;
+      const newLo = b.l < lo0;
+      if (newHi || newLo) {
+        // only the range made since the last pass; the bar's latest price bounds the side that didn't extend
+        const h = newHi ? b.h : Math.max(b.c, newLo ? b.l : b.c);
+        const l = newLo ? b.l : Math.min(b.c, h);
+        touch(s, { t: b.t, o: Math.min(Math.max(b.c, l), h), h, l, c: b.c, v: b.v }, nowIso, out);
+      }
+    }
+    if (!complete) {
+      s.formingT = b.t;
+      s.formingHigh = seen ? Math.max(s.formingHigh as number, b.h) : b.h;
+      s.formingLow = seen ? Math.min(s.formingLow as number, b.l) : b.l;
+      continue;
+    }
+    s.formingT = null;
+    s.formingHigh = null;
+    s.formingLow = null;
     s.checkedThroughT = b.t;
     s.barsElapsed += 1;
     if (s.status === "pending" && s.barsElapsed >= s.pendingBars) close(s, out, "expired", null, nowIso, b.t);
@@ -126,6 +158,11 @@ export function stepLifecycle(
   if (s.status !== "closed" && lastPrice !== null && Number.isFinite(lastPrice) && lastPrice > 0) {
     const t = s.checkedThroughT !== null ? s.checkedThroughT + s.tfSec : s.issuedBarT + s.tfSec;
     touch(s, { t, o: lastPrice, h: lastPrice, l: lastPrice, c: lastPrice, v: 0 }, nowIso, out);
+    // the live price is part of the forming bar's range from now on
+    if ((s.status as LifecycleSignal["status"]) !== "closed" && typeof s.formingHigh === "number" && typeof s.formingLow === "number") {
+      s.formingHigh = Math.max(s.formingHigh, lastPrice);
+      s.formingLow = Math.min(s.formingLow, lastPrice);
+    }
   }
   return { signal: s, transitions: out };
 }

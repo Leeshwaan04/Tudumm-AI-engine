@@ -1,25 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Check, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { SignalCard, regimeLabel } from "../../components/SignalCard";
 import { EmptyState, SessionDot, Switch } from "../../components/ui";
 import { useDocumentTitle } from "../../components/hooks";
-import { instruments, MARKET_ORDER, MARKET_SHORT, STYLE_LABEL, getInstrument, instrumentsIn, riskPerUnit } from "../../engine/seed";
+import { instruments, MARKET_ORDER, MARKET_SHORT, STYLE_LABEL, getInstrument, instrumentsIn, riskPerUnit, useDataset } from "../../engine/universe";
+import { useData } from "../../components/DataProvider";
+import { EngineTag, LiveUnavailable, NAState, fmtAsOf, sitOutLabel } from "../../components/badges";
+import { marketApi } from "../../api/market";
+import { useApi } from "../../api/useApi";
+import { track } from "../../api/events";
 import type { Instrument, LiveStatus, MarketId, Regime, Style } from "../../engine/types";
 import { isTrade } from "../../engine/types";
-import { LOAD_AT, issuedAtMs, secondsToReveal, useNow, useStatuses, useTick, live } from "../../engine/live";
+import { issuedAtMs, useNow, useStatuses, useTick } from "../../engine/live";
 import { marketSession } from "../../engine/sessions";
 import { PERSONA_BY_ID, trackingStore, toggleIn, useProfile, useStore, watchlistStore } from "../../engine/profile";
-import { fmtAgo, fmtCountdown, fmtMoney, fmtPrice, fmtSignedPct } from "../../engine/format";
+import { fmtMoney, fmtPrice, fmtSignedPct } from "../../engine/format";
 
 type Sort = "confidence" | "newest" | "rr";
 type DirF = "all" | "LONG" | "SHORT";
-type StatusF = "all" | "active" | "pending" | "t1_hit" | "queued";
+type StatusF = "all" | "active" | "pending" | "t1_hit";
 
 const STYLES: Style[] = ["intraday", "swing", "positional", "investing"];
 
 export function Signals() {
   useDocumentTitle("Signals · Tudumm");
+  const ds = useDataset();
+  const data = useData();
   const profile = useProfile();
   const statuses = useStatuses();
   const defaults = useMemo(
@@ -39,6 +46,21 @@ export function Signals() {
     setMarkets(defaults.markets);
     setStyles(defaults.styles);
   }, [defaults]);
+
+  // filter_change (debounced; skip the initial render)
+  const firstFilter = useRef(true);
+  useEffect(() => {
+    if (firstFilter.current) {
+      firstFilter.current = false;
+      return;
+    }
+    const t = window.setTimeout(
+      () => track("filter_change", { markets: markets.join(","), styles: styles.join(","), dir, status, sort, showSit, live: true }),
+      800,
+    );
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markets, styles, dir, status, sort, showSit]);
 
   const resetFilters = () => {
     setMarkets(defaults.markets);
@@ -72,9 +94,6 @@ export function Signals() {
     const conf = (i: Instrument) => (isTrade(i.signal) ? i.signal.confidence : -1);
     const rr = (i: Instrument) => (isTrade(i.signal) ? i.signal.rr2 : -1);
     out.sort((a, b) => {
-      const qa = statuses[a.symbol] === "queued" ? 1 : 0;
-      const qb = statuses[b.symbol] === "queued" ? 1 : 0;
-      if (qa !== qb) return qb - qa;
       const sa = statuses[a.symbol] === "sit_out" ? 1 : 0;
       const sb = statuses[b.symbol] === "sit_out" ? 1 : 0;
       if (sort !== "newest" && sa !== sb) return sa - sb;
@@ -83,24 +102,45 @@ export function Signals() {
       return issuedAtMs(b) - issuedAtMs(a);
     });
     return out;
-  }, [markets, styles, dir, status, sort, showSit, statuses]);
+    // ds: re-run when a live poll swaps the dataset
+  }, [markets, styles, dir, status, sort, showSit, statuses, ds]);
 
   const toggleMarket = (m: MarketId) => setMarkets((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
   const toggleStyle = (s: Style) => setStyles((l) => (l.includes(s) ? l.filter((x) => x !== s) : [...l, s]));
   const live_ = instruments.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
+
+  if (data.phase !== "ready") {
+    return (
+      <div className="feed">
+        <div className="feed__main">
+          <header className="phead">
+            <div>
+              <p className="eyebrow phead__eyebrow">
+                Signals · live beta <EngineTag />
+              </p>
+            </div>
+          </header>
+          <LiveUnavailable />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="feed">
       <div className="feed__main">
         <header className="phead">
           <div>
-            <p className="eyebrow">Signals · live demo</p>
+            <p className="eyebrow phead__eyebrow">
+              Signals · live beta <EngineTag />
+            </p>
             <h1 className="phead__title serif">
               {live_} live calls, <em>{instruments.filter((i) => statuses[i.symbol] === "sit_out").length} sitting out</em>
             </h1>
           </div>
           <p className="phead__note">
-            Every call has an entry, a stop, two targets and the condition that cancels it. Probability, not promise.
+            Real prices from free public sources; calls from engine v0, a transparent rule set whose confidence isn't calibrated yet. Every call has an
+            entry, a stop, two targets and the condition that cancels it.
           </p>
         </header>
 
@@ -161,7 +201,6 @@ export function Signals() {
                 <option value="active">Active</option>
                 <option value="pending">Entry pending</option>
                 <option value="t1_hit">T1 hit</option>
-                <option value="queued">Revealing</option>
               </select>
             </label>
             <label className="filters__sel">
@@ -207,8 +246,9 @@ export function Signals() {
         )}
       </div>
 
-      <aside className="rail" aria-label="Reveal countdown, sit-outs and your risk">
-        <NextReveal />
+      <aside className="rail" aria-label="Engine status, sit-outs and your risk">
+        <EngineCadence />
+        <AwaitingData />
         <SitOutList />
         <YourRisk />
       </aside>
@@ -219,6 +259,7 @@ export function Signals() {
 /* ---------- regime strip ---------- */
 export function marketRegime(m: MarketId): Regime | "mixed" {
   const insts = instrumentsIn(m);
+  if (!insts.length) return "unknown";
   const counts = new Map<Regime, number>();
   for (const i of insts) counts.set(i.signal.regime, (counts.get(i.signal.regime) ?? 0) + 1);
   const [top, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -241,7 +282,6 @@ function RegimeStrip({
         const insts = instrumentsIn(m);
         const liveN = insts.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
         const sit = insts.filter((i) => statuses[i.symbol] === "sit_out").length;
-        const q = insts.filter((i) => statuses[i.symbol] === "queued").length;
         const ses = marketSession(m, now);
         const on = selected.includes(m);
         return (
@@ -259,9 +299,9 @@ function RegimeStrip({
                 <SessionDot state={ses.state} /> {ses.status}
               </span>
             </span>
-            <span className="regime__reg">{regimeLabel(marketRegime(m))}</span>
+            <span className="regime__reg">{insts.length ? regimeLabel(marketRegime(m)) : "No data yet"}</span>
             <span className="regime__n mono">
-              {liveN} live · {sit} sitting out{q ? ` · ${q} queued` : ""}
+              {insts.length ? `${liveN} live · ${sit} sitting out` : "awaiting source"}
             </span>
           </button>
         );
@@ -284,8 +324,16 @@ function WatchStrip() {
   );
 }
 function WatchPill({ symbol }: { symbol: string }) {
-  const inst = getInstrument(symbol)!;
+  const inst = getInstrument(symbol);
   const t = useTick(symbol);
+  if (!inst) {
+    return (
+      <Link to={`/app/i/${symbol}`} className="wpill" title="No live price for this instrument yet">
+        <b className="mono">{symbol}</b>
+        <span className="mono t3">no data</span>
+      </Link>
+    );
+  }
   const chg = ((t.price - inst.prevClose) / inst.prevClose) * 100;
   return (
     <Link to={`/app/i/${symbol}`} className="wpill">
@@ -299,68 +347,6 @@ function WatchPill({ symbol }: { symbol: string }) {
 }
 
 /* ---------- right rail ---------- */
-export function NextReveal() {
-  const now = useNow();
-  const statuses = useStatuses();
-  const queued = instruments
-    .filter((i) => i.signal.status === "queued")
-    .map((i) => ({ inst: i, left: secondsToReveal(i, now), status: statuses[i.symbol] }));
-  const pending = queued.filter((q) => q.status === "queued").sort((a, b) => a.left - b.left);
-  const revealed = queued.filter((q) => q.status !== "queued");
-  const next = pending[0];
-  return (
-    <section className="panel rpanel">
-      <header className="panel__head">
-        <span className="eyebrow">Drumroll</span>
-        <span className="mono t3 rpanel__meta">{pending.length} queued</span>
-      </header>
-      <div className="panel__body">
-        {next ? (
-          <div className={`drum ${Math.ceil(next.left) <= 3 ? "is-final" : ""}`}>
-            <p className="drum__lab">Next reveal in</p>
-            <p key={Math.ceil(next.left)} className="drum__num mono" aria-live="polite">
-              {fmtCountdown(next.left)}
-            </p>
-            <p className="drum__sub">
-              <span className="mono">{next.inst.symbol}</span> · {next.inst.name} · sealed until then
-            </p>
-            <div className="drum__beats" aria-hidden="true">
-              {Array.from({ length: 12 }, (_, k) => (
-                <i key={k} className={k < 12 - Math.min(12, Math.ceil(next.left)) ? "is-on" : ""} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="drum drum--done">
-            <p className="drum__lab">All queued calls revealed</p>
-            <p className="drum__sub">New calls are revealed only when the five layers line up. Nothing is forced to fill a schedule.</p>
-          </div>
-        )}
-        {(pending.length > 1 || revealed.length > 0) && (
-          <ul className="rlist">
-            {pending.slice(1).map((q) => (
-              <li key={q.inst.symbol}>
-                <span className="mono">{q.inst.symbol}</span>
-                <span className="t3">in</span>
-                <span className="mono c-brand">{fmtCountdown(q.left)}</span>
-              </li>
-            ))}
-            {revealed.map((q) => (
-              <li key={q.inst.symbol}>
-                <Link to={`/app/i/${q.inst.symbol}`} className="rlist__link mono">
-                  {q.inst.symbol}
-                </Link>
-                <span className="t3">revealed {fmtAgo((now - (live.getRevealedAt(q.inst.symbol) ?? LOAD_AT)) / 60000)}</span>
-                <span className="mono">{q.status === "active" ? "ACTIVE" : "ENTRY PENDING"}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function SitOutList() {
   const sits = instruments.filter((i) => i.signal.status === "sit_out");
   return (
@@ -375,7 +361,7 @@ function SitOutList() {
             <Link to={`/app/i/${i.symbol}`} className="sitlist__item">
               <span className="sitlist__top">
                 <b className="mono">{i.symbol}</b>
-                <span className="chip">{regimeLabel(i.signal.regime)}</span>
+                <span className="chip">{sitOutLabel(i.signal.sitOutReason) ?? regimeLabel(i.signal.regime)}</span>
               </span>
               <span className="sitlist__why">{i.signal.thesis}</span>
             </Link>
@@ -397,7 +383,7 @@ function YourRisk() {
     .map((i) => ({ inst: i, status: statuses[i.symbol] }));
   const open = items.filter((x) => x.status === "active");
   const be = items.filter((x) => x.status === "t1_hit");
-  const pend = items.filter((x) => x.status === "pending" || x.status === "queued");
+  const pend = items.filter((x) => x.status === "pending");
   const total = perTrade * open.length;
   const pctOfCap = (total / profile.capital) * 100;
   return (
@@ -483,6 +469,80 @@ function YourRisk() {
           Per-trade risk sized from stop distance ({items[0] ? `e.g. ${items[0].inst.symbol} risks ${riskPerUnit(items[0].inst.signal as never).toFixed(2)} per unit` : "see any instrument's sizer"}).
         </p>
       </div>
+    </section>
+  );
+}
+
+/* ---------- engine cadence ---------- */
+function EngineCadence() {
+  const now = useNow(30_000);
+  const h = useApi("market:health", () => marketApi.health(), { refreshMs: 60_000, staleMs: 30_000 });
+  const statuses = useStatuses();
+  const last = h.data?.lastRunAt ? Date.parse(h.data.lastRunAt) : NaN;
+  const mins = Number.isFinite(last) ? Math.max(0, Math.round((now - last) / 60_000)) : null;
+  const liveN = instruments.filter((i) => ["active", "pending", "t1_hit"].includes(statuses[i.symbol])).length;
+  const bad = (h.data?.sources ?? []).filter((x) => !x.ok);
+  return (
+    <section className="panel rpanel">
+      <header className="panel__head">
+        <span className="eyebrow">Engine v0</span>
+        <span className="mono t3 rpanel__meta">{liveN} open</span>
+      </header>
+      <div className="panel__body cadence">
+        {h.error && !h.data ? (
+          <NAState title="Engine status unavailable" reason="The market health endpoint didn't answer. Prices and calls above are from the last universe refresh." />
+        ) : (
+          <>
+            <p className="cadence__main">
+              Engine runs every 15 min
+              <span className="mono t2"> · {mins === null ? (h.data ? "no run yet" : "checking…") : `last run ${mins === 0 ? "just now" : `${mins} min ago`}`}</span>
+            </p>
+            <p className="cadence__sub t2">
+              Crypto and the gold proxy are evaluated on each completed 4-hour bar; US, India and FX on each completed daily bar. New calls appear here with a reveal, never on a schedule.
+            </p>
+            {h.data?.ledgerEntries !== undefined && (
+              <p className="cadence__meta mono t3">
+                {h.data.ledgerEntries} ledger entries ·{" "}
+                <Link to="/app/proof" className="u-link">
+                  verify the chain
+                </Link>
+              </p>
+            )}
+            {bad.length > 0 && (
+              <p className="cadence__warn mono">
+                {bad.length} source{bad.length === 1 ? "" : "s"} not reporting: {bad.map((b) => b.source).join(", ")}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AwaitingData() {
+  const d = useData();
+  if (!d.unavailable.length) return null;
+  return (
+    <section className="panel rpanel">
+      <header className="panel__head">
+        <span className="eyebrow">Awaiting data</span>
+        <span className="mono t3 rpanel__meta">{d.unavailable.length}</span>
+      </header>
+      <ul className="sitlist">
+        {d.unavailable.map((u) => (
+          <li key={u.symbol}>
+            <div className="sitlist__item">
+              <span className="sitlist__top">
+                <b className="mono">{u.symbol}</b>
+                <span className="chip">{MARKET_SHORT[u.market as MarketId] ?? u.market}</span>
+              </span>
+              <span className="sitlist__why">{u.reason}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {d.lastPollAt && <p className="src-line mono rpanel__foot">checked {fmtAsOf(new Date(d.lastPollAt).toISOString())}</p>}
     </section>
   );
 }

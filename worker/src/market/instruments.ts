@@ -151,6 +151,20 @@ export const INSTRUMENTS: InstrumentDef[] = [
 
 export const BY_SYMBOL = new Map(INSTRUMENTS.map((i) => [i.symbol, i]));
 
+/** NSE cash session, Mon–Fri 09:15–15:30 IST. Exchange holidays aren't modelled (no ticks arrive then). */
+export function nseSessionOpen(nowMs: number): boolean {
+  const ist = new Date(nowMs + 330 * 60000);
+  const dow = ist.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const m = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  return m >= 9 * 60 + 15 && m < 15 * 60 + 30;
+}
+
+/** Freshness of what was actually served: India quotes streamed by the live runner (5paisa) are realtime. */
+export function servedFreshness(i: InstrumentDef, quoteSource: string | null | undefined): Freshness {
+  return quoteSource === "5paisa" ? "realtime" : i.freshness;
+}
+
 const ALIAS = new Map<string, InstrumentDef>();
 for (const i of INSTRUMENTS) {
   ALIAS.set(i.symbol.toUpperCase(), i);
@@ -242,6 +256,10 @@ export const SOURCES: SourceInfo[] = [
   { id: "nse-archives", name: "NSE end-of-day archives (CM + F&O bhavcopy, index closes)", url: "https://nsearchives.nseindia.com", freshness: "eod",
     usedFor: "India daily candles, option-chain summaries, futures OI build-up, India VIX, index P/E", runsIn: "runner",
     license: "NSE website terms restrict commercial use and redistribution; an NSE data-vending licence is needed before a paid launch. Live NSE JSON APIs are not used.", commercialUse: "license_required" },
+  { id: "5paisa", name: "5paisa Xstream market data (owner's own account)", url: "https://xstream.5paisa.com/dev-docs", freshness: "realtime",
+    usedFor: "India realtime: NIFTY, BANKNIFTY, the six NSE stocks and India VIX — streaming quotes (WebSocket), today's forming daily bar, daily history", runsIn: "runner",
+    license: "Fetched with the owner's own 5paisa API credentials for the owner's personal use. Exchange data from a broker API may not be redistributed to other users; an NSE data-vending licence is needed before multi-user or paid use.",
+    commercialUse: "license_required" },
   { id: "ecb-frankfurter", name: "ECB euro reference rates via Frankfurter", url: "https://api.frankfurter.dev", freshness: "daily-ref",
     usedFor: "EURUSD, USDINR, USDJPY daily reference closes", runsIn: "worker+runner",
     license: "ECB reference rates are free to reuse (informational, not for transactions); Frankfurter is an open-source proxy.", commercialUse: "allowed" },

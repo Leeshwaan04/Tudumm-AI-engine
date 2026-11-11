@@ -1,20 +1,24 @@
-// Unit checks for URL/title → symbol detection and the live simulation rules.
+// Unit checks for URL/title → symbol detection, alias resolution, formatting,
+// and the live engine's honesty rules (no random walk, no client-side reveals,
+// ledger stats from closed calls only), over a recorded live universe.
 // Run from the repo root:  node extension/tests/detect.test.mjs
 import { readFileSync } from "node:fs";
 import { createEngine, siteFor, SITES } from "../lib/engine.js";
+import { sanitizeUniverse } from "../lib/datasource.js";
 
-const seed = JSON.parse(readFileSync(new URL("../data/seed.json", import.meta.url), "utf8"));
-const engine = createEngine(seed, { loadedAt: Date.now() });
+const recorded = sanitizeUniverse(JSON.parse(readFileSync(new URL("./fixtures/universe-live.json", import.meta.url), "utf8")));
+if (!recorded.ok) throw new Error(`fixture rejected: ${recorded.reason}`);
+// Test data: NIFTY carries the brief's example setup so level formatting can be checked exactly.
+const NIFTY_SETUP = { id: "SIG-NIFTY-TEST", symbol: "NIFTY", status: "active", regime: "trending-up", issuedMinutesAgo: 38, layers: { price: 72, flow: 55, derivatives: 81, fundamentals: 20, context: 35 }, thesis: "Test setup.", invalidation: "Hourly close below 25,760.", direction: "LONG", style: "swing", timeframe: "1H", confidence: 0.71, entryLow: 25900, entryHigh: 25960, stop: 25760, target1: 26180, target2: 26350, rr1: 1.47, rr2: 2.47 };
+const universe = {
+  ...recorded.universe,
+  instruments: recorded.universe.instruments.map((i) => (i.symbol === "NIFTY" ? { ...i, price: 25962.4, prevClose: 25884.1, signal: NIFTY_SETUP } : i)),
+};
+const engine = createEngine(universe, { loadedAt: Date.now() });
 
-let pass = 0;
-let fail = 0;
-function check(name, cond, detail = "") {
-  if (cond) pass++;
-  else {
-    fail++;
-    console.error(`FAIL  ${name}${detail ? `  (${detail})` : ""}`);
-  }
-}
+import { check, done, section } from "./harness.mjs";
+
+section("detect (live engine)");
 
 // [url, title, expected symbol | null, expected ticker for "Not covered yet" | undefined]
 const CASES = [
@@ -77,37 +81,31 @@ for (const url of ["https://www.google.com/search?q=reliance", "https://example.
 check("google finance requires /finance path", siteFor("https://www.google.com/finance/quote/AAPL:NASDAQ")?.key === "google" && siteFor("https://www.google.com/maps") === null);
 check("8 supported sites", SITES.length === 8);
 
-// Every seed alias resolves to its own instrument (no cross-symbol collisions)
-for (const inst of seed.instruments) {
+// Every alias resolves to its own instrument (no cross-symbol collisions)
+for (const inst of universe.instruments) {
   for (const a of [inst.symbol, ...inst.aliases]) {
     check(`alias ${a}`, engine.resolve(a) === inst.symbol, `got ${engine.resolve(a)}`);
   }
 }
 
-// Live simulation: deterministic, and clamped per the shared rules over a long window
+// Prices change only when real data arrives: no random walk, ever.
 const t0 = Date.now();
-check("deterministic across engines", createEngine(seed).priceAt("NIFTY", t0) === engine.priceAt("NIFTY", t0));
-for (const inst of seed.instruments) {
-  const s = inst.signal;
-  if (!["active", "t1_hit", "pending"].includes(s.status)) continue;
-  const mid = (s.entryLow + s.entryHigh) / 2;
-  let bad = 0;
-  for (let i = 0; i < 4000; i++) {
-    const p = engine.priceAt(inst.symbol, t0 + i * 1700);
-    if (s.status === "active" || s.status === "t1_hit") {
-      const stop = s.status === "t1_hit" ? mid : s.stop;
-      if (s.direction === "LONG" ? p <= stop || p >= s.target2 : p >= stop || p <= s.target2) bad++;
-    } else if (p >= s.entryLow && p <= s.entryHigh) bad++;
-  }
-  check(`clamp ${inst.symbol} (${s.status})`, bad === 0, `${bad} violations`);
+check("deterministic across engines", createEngine(universe).priceAt("NIFTY", t0) === engine.priceAt("NIFTY", t0));
+for (const inst of universe.instruments) {
+  const want = inst.price ?? null;
+  let moved = 0;
+  for (let i = 0; i < 400; i++) if (engine.priceAt(inst.symbol, t0 + i * 17_000) !== want) moved++;
+  check(`no random walk ${inst.symbol}`, moved === 0, `${moved} prices differ from the universe's ${want}`);
 }
 
-// Queued → revealed: status depends on price in the entry zone at reveal time
-for (const inst of seed.instruments.filter((i) => i.signal.status === "queued")) {
-  const before = engine.signalState(inst.symbol, engine.loadedAt + 1000);
-  const after = engine.signalState(inst.symbol, engine.loadedAt + inst.signal.revealAfterSec * 1000 + 10);
-  check(`queued ${inst.symbol} before reveal`, before.status === "queued");
-  check(`queued ${inst.symbol} after reveal`, ["active", "pending"].includes(after.status), after.status);
+// A legacy "queued" signal (v0.1 demo drumroll) is never shown: no client-side reveal.
+{
+  const btc = universe.instruments.find((i) => i.symbol === "BTCUSDT");
+  const legacy = createEngine({ ...universe, instruments: [{ ...btc, signal: { ...NIFTY_SETUP, symbol: "BTCUSDT", status: "queued", revealAfterSec: 25 } }] });
+  const later = legacy.signalState("BTCUSDT");
+  const snap = legacy.snapshot("BTCUSDT");
+  check("legacy queued → sitting out", legacy.instruments[0].signal.status === "sit_out" && later.status === "sit_out" && snap.status === "sit_out");
+  check("no countdown / reveal fields", !("countdown" in snap) && !("secondsToReveal" in snap) && !("revealAt" in later));
 }
 
 // Snapshot levels match the brief's NIFTY example exactly
@@ -119,9 +117,15 @@ check("INR grouping", engine.snapshot("NIFTY").priceText.startsWith("₹") && /�
 check("USDT suffix", engine.snapshot("BTCUSDT").priceText.endsWith(" USDT"));
 check("sit-out has no levels", engine.snapshot("BANKNIFTY").levels === null && engine.snapshot("BANKNIFTY").invalidation === null);
 
-// Ledger stats computed, never hard-coded
+// Ledger stats computed from the live (v2) ledger, never hard-coded: closed calls only.
+const L = universe.ledger;
 const ls = engine.ledgerStats();
-check("ledger 320", ls.count === 320 && ls.head === seed.ledger[319].hash);
+check("ledger: issues aren't counted as closed calls", L.length > 0 && ls.entries === L.length && ls.count === L.filter((e) => e.type === "close" && e.r != null).length && ls.head === L[L.length - 1].hash);
+check("ledger: under 30 closes is too few to judge", ls.tooFew === true);
+{
+  const close = { ...L[0], type: "close", r: 1.5, outcome: "target", hash: "f".repeat(64) };
+  const st = createEngine({ ...universe, ledger: [...L, close] }).ledgerStats();
+  check("ledger: a close counts, with its R", st.count === ls.count + 1 && st.totalR === (ls.totalR || 0) + 1.5 && st.head === close.hash);
+}
 
-console.log(`${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+await done(import.meta.url);

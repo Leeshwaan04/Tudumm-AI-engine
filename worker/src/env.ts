@@ -27,4 +27,15 @@ export interface Env {
   RAZORPAY_WEBHOOK_SECRET?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+
+  // Zerodha Kite Connect (owner's own account, manual confirmation of every order). See
+  // worker/src/broker/* and relay/README.md. Login + read APIs need KITE_API_KEY + KITE_API_SECRET;
+  // order placement additionally needs RELAY_TOKEN and the static-IP relay process.
+  KITE_API_KEY?: string;
+  KITE_API_SECRET?: string; // also the HKDF input for the AES-GCM key that encrypts the access token
+  RELAY_TOKEN?: string; // Bearer for /api/internal/relay/* (>= 32 chars, e.g. `openssl rand -hex 32`)
+  /** Dedicated AES-GCM key material for broker credentials (>= 32 chars). Preferred over KITE_API_SECRET. */
+  BROKER_VAULT_KEY?: string;
+  /** Tests only: honoured ONLY when APP_ENV=development and it is http://127.0.0.1:<port>. */
+  KITE_API_BASE?: string;
 }

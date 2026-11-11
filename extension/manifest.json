@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Tudumm: Market Signals",
   "short_name": "Tudumm",
-  "version": "0.1.0",
-  "description": "Tudumm reads every layer of a market and turns it into clear trade setups with defined risk. Prototype on simulated data.",
+  "version": "0.2.0",
+  "description": "Trade setups with defined risk on the charts you open. Live beta on free market data, labelled by freshness. Not advice.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
@@ -25,13 +25,25 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "sidePanel", "activeTab"],
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://tudumm.in/*",
+    "https://tudumm-ai-engine.sumitbagewadi6.workers.dev/*"
+  ],
+  "optional_host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
   "options_page": "options.html",
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'"
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; connect-src 'self' https://tudumm.in https://tudumm-ai-engine.sumitbagewadi6.workers.dev https://data-api.binance.vision wss://data-stream.binance.vision http://localhost:* http://127.0.0.1:*"
   },
   "content_scripts": [
     {
@@ -45,7 +57,9 @@
         "https://www.investing.com/*",
         "https://www.moneycontrol.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

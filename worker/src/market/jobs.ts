@@ -25,6 +25,8 @@ export interface JobOutput {
   memQuotes: Record<string, { price: number; prevClose: number | null; asOf: string }>;
   prices: Record<string, number>;
   symbols: string[]; // instruments refreshed
+  /** The same data as plain rows (the live runner re-uses cryptoJob from its own egress and POSTs these to /api/internal/ingest). */
+  rows?: { quotes: QuoteRow[]; candles: CandleRow[]; snapshots: SnapshotRow[] };
 }
 
 const empty = (): JobOutput => ({ writes: [], memBars: {}, memSnapshots: {}, memQuotes: {}, prices: {}, symbols: [] });
@@ -152,6 +154,7 @@ export async function cryptoJob(db: MarketDb, health: Health, now: Date): Promis
   }
   out.writes.push(...upsertQuotes(quotes, nowIso), ...upsertCandles(candles), ...upsertSnapshots(snaps, nowIso));
   if (candles.length > 20) out.writes.push(...pruneCandles(BINANCE_SET.map((i) => ({ symbol: i.symbol, tf: "4H" })), 400));
+  out.rows = { quotes, candles, snapshots: snaps };
   return out;
 }
 

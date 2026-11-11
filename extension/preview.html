@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tudumm extension preview</title>
-  <meta name="description" content="The Tudumm Chrome extension's real UI (chip, popup, side panel) running outside Chrome on simulated data.">
+  <meta name="description" content="The Tudumm Chrome extension's real UI (chip, popup, side panel) running outside Chrome, on live Tudumm data or a recorded live snapshot.">
   <link rel="icon" href="icons/icon-32.png">
   <link rel="stylesheet" href="lib/tokens.css">
   <link rel="stylesheet" href="lib/ui.css">
@@ -18,14 +18,14 @@
   <header class="pv-head">
     <div class="pv-brand">
       <span id="brand"></span>
-      <span class="pv-kicker mono">Chrome extension · v0.1.0 · preview mode</span>
+      <span class="pv-kicker mono">Chrome extension · v0.2.0 · preview mode</span>
     </div>
     <h1 class="pv-title">The verdict, <em>wherever you chart.</em></h1>
-    <p class="pv-lede">This is the extension's real UI running outside Chrome: the content-script chip on a mock chart page, the toolbar popup and the side panel. Pick a page to simulate and all three follow it. Anything that needs a Chrome API explains itself with <span class="mono">Available when installed</span>.</p>
+    <p class="pv-lede">This is the extension's real UI running outside Chrome: the content-script chip on a mock chart page, the toolbar popup and the side panel. Pick a page and all three follow it. Anything that needs a Chrome API explains itself with <span class="mono">Available when installed</span>.</p>
     <form class="pv-controls" id="controls" autocomplete="off">
       <label class="pv-field">
-        <span class="eyebrow">Simulate a page</span>
-        <select id="example" aria-label="Example page to simulate"></select>
+        <span class="eyebrow">Pick a page</span>
+        <select id="example" aria-label="Example page"></select>
       </label>
       <label class="pv-field pv-field--grow">
         <span class="eyebrow">…or paste any URL</span>
@@ -48,10 +48,10 @@
         </div>
         <div class="browser-bar"><span class="lock" aria-hidden="true">⌂</span><span class="url mono" id="url"></span><span class="ext-icon" title="Tudumm toolbar icon"><img src="icons/icon-32.png" width="16" height="16" alt=""></span></div>
         <div class="browser-viewport" id="viewport">
-          <div class="host" id="host"><div class="loading host-empty"><b>Loading the demo…</b></div></div>
+          <div class="host" id="host"><div class="loading host-empty"><b>Loading live data…</b></div></div>
         </div>
       </div>
-      <p class="pv-cap">Mock host page drawn locally for the demo; it is not the real site. The chip is the exact renderer the content script injects.</p>
+      <p class="pv-cap">Preview of the chip on a chart site. The host page is drawn locally (it is not the real site); its chart shows real daily candles from the Tudumm API. The chip is the exact renderer the content script injects.</p>
     </section>
 
     <section class="pv-col" aria-labelledby="lbl-b">
@@ -76,11 +76,11 @@
       <li><span class="mono">03</span>Click <b>Load unpacked</b>.</li>
       <li><span class="mono">04</span>Select the <code class="mono">Tudumm-AI-engine/extension</code> folder, then pin the two-beat icon.</li>
     </ol>
-    <p class="pv-cap">Permissions requested: <span class="mono">storage</span>, <span class="mono">sidePanel</span>, <span class="mono">activeTab</span>. The chip runs only on the eight supported sites.</p>
+    <p class="pv-cap">Permissions requested: <span class="mono">storage</span>, <span class="mono">sidePanel</span>, <span class="mono">activeTab</span>, and host access to the Tudumm site only (live data and account linking). Access to <span class="mono">localhost</span> is optional and asked only when you point Options at a local dev API. The chip runs only on the eight supported sites.</p>
   </section>
 
   <footer class="pv-foot">
-    <p class="disclaimer">Tudumm is a prototype. All prices, signals and track-record data are simulated. Nothing here is investment advice. Trading involves risk of loss.</p>
+    <p class="disclaimer">Tudumm is in beta. Live data is labelled with its source and freshness, and live signals come from engine v0, which is uncalibrated. Signals are probabilistic and not investment advice. Trading involves risk of loss.</p>
   </footer>
 </body>
 </html>

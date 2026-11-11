@@ -1,10 +1,14 @@
 import type { Currency } from "./types";
 import type { Tick } from "./live";
-import { getInstrument } from "./seed";
+import { getInstrument } from "./universe";
 
-/** Simulated cross rates taken from the live demo FX instruments (USDT treated as USD). */
+/**
+ * Cross rates from the live FX instruments (ECB daily reference rates; USDT treated as USD).
+ * NaN when the pair isn't in the live universe: callers must say so instead of guessing.
+ */
 function px(ticks: Record<string, Tick> | undefined, symbol: string): number {
-  return ticks?.[symbol]?.price ?? getInstrument(symbol)!.price;
+  const p = ticks?.[symbol]?.price || getInstrument(symbol)?.price;
+  return p && p > 0 ? p : NaN;
 }
 
 export function usdPer(cur: Currency, ticks?: Record<string, Tick>): number {
@@ -26,7 +30,7 @@ export function convert(amount: number, from: Currency, to: Currency, ticks?: Re
   return (amount * usdPer(from, ticks)) / usdPer(to, ticks);
 }
 
-/** Human description of the rate used, e.g. "USDINR 88.62". */
+/** Human description of the rate used, e.g. "at the latest reference rate USDINR 88.62". */
 export function rateNote(from: Currency, to: Currency, ticks?: Record<string, Tick>): string | null {
   if (from === to) return null;
   const f = from === "USDT" ? "USD" : from;
@@ -39,5 +43,5 @@ export function rateNote(from: Currency, to: Currency, ticks?: Record<string, Ti
     if (c === "EUR") used.add(pair("EURUSD"));
     if (c === "JPY") used.add(pair("USDJPY"));
   }
-  return `at simulated ${[...used].join(" · ")}`;
+  return `at the latest reference rate ${[...used].join(" · ")}`;
 }

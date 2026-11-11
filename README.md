@@ -1,18 +1,23 @@
-# Tudumm: AI market-intelligence engine (v0.1 prototype)
+# Tudumm: AI market-intelligence engine (v0.2 live beta)
 
 > Tudumm reads every layer of a market and turns it into clear trade setups with defined risk. It works for any instrument, in any market, and every call it makes is publicly tracked.
 
-This repo is a **frontend prototype on simulated data**: a landing page, a trading terminal and a Chrome extension. Every price, signal and track-record number is simulated. Nothing here is investment advice. Trading involves risk of loss.
+This repo is a **live beta**: a Cloudflare Worker API with real market data, a rule-based signal engine ("engine v0", **not yet calibrated**) and a hash-chained public ledger of every call, plus the web terminal and a Chrome extension. India is realtime via the owner's 5paisa account while the live feed runs (`npm run live`), crypto is realtime, US is 15-minute delayed, FX is daily reference rates; each instrument is labelled with what actually served it. The landing page and the extension's demo mode still use the simulated dataset in `shared/seed.json`, and say so. Orders are only ever placed on the owner's own Zerodha account, after manual confirmation, through `relay/kite-relay.mjs`. Nothing here is investment advice. Trading involves risk of loss.
+
+More docs: `worker/README.md` (API, accounts, admin), `worker/README-market.md` (data sources, engine, live feed), `worker/SECURITY-REVIEW.md`, `docs/BROKERS-SPEC.md`.
 
 ```
 Tudumm-AI-engine/
-├── shared/seed.json         canonical simulated dataset (22 instruments, 320-entry hash-chained ledger)
+├── shared/seed.json         simulated demo dataset (landing page + extension demo mode)
 ├── scripts/
 │   ├── gen-seed.py          regenerates shared/seed.json (do not hand-edit the JSON)
 │   ├── verify-ledger.mjs    recomputes the ledger hash chain in Node
 │   ├── sync-seed.sh         copies the seed into web/ and extension/
 │   └── gen-hero-texture.mjs regenerates the landing hero texture (web/public/assets/hero-terrain.webp)
-├── web/                     Vite + React 18 + TypeScript app (landing + terminal)
+├── worker/                  Cloudflare Worker: API, accounts, admin, market data, engine v0, Kite broker routes
+├── runner/                  Node jobs: NSE/US/FX ingest and the live feed (runner/live.ts)
+├── relay/                   static-IP order relay for Zerodha Kite (owner-confirmed orders only)
+├── web/                     Vite + React 18 + TypeScript app (landing + terminal + admin)
 └── extension/               Chrome MV3 extension, no build step (see extension/README.md)
 ```
 

@@ -1,6 +1,9 @@
-// Options: web app URL, capital/currency/risk, chip master + per-site toggles.
+// Options: Tudumm account link, web app URL (where live data comes from),
+// capital/currency/risk, chip master + per-site toggles.
 // Saved to chrome.storage.sync (preview: in-memory, mirrored to localStorage).
-import { DEFAULT_SETTINGS, mergeSettings, SITES, CAPITAL_CURRENCIES, safeWebUrl, terminalUrl, formatMoney } from "./lib/engine.js";
+// The account key never touches this page: the background owns it.
+import { DEFAULT_SETTINGS, mergeSettings, SITES, CAPITAL_CURRENCIES, safeWebUrl, webUrlProblem, terminalUrl, formatMoney } from "./lib/engine.js";
+import { createAccountPanel } from "./lib/accountui.js";
 import * as P from "./lib/platform.js";
 import * as UI from "./lib/ui.js";
 
@@ -9,13 +12,14 @@ const $form = document.getElementById("form");
 let saved = null;
 let draft = null;
 let externalChange = false;
+let acctPanel = null;
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const same = (a, b) => JSON.stringify(mergeSettings(a)) === JSON.stringify(mergeSettings(b));
 
 function validate(d) {
   const errors = {};
-  if (!safeWebUrl(d.webUrl)) errors.webUrl = "Enter a full http:// or https:// address, e.g. http://localhost:5180";
+  if (!safeWebUrl(d.webUrl)) errors.webUrl = webUrlProblem(d.webUrl) || "Enter an https:// address, e.g. https://tudumm.in";
   if (!(Number(d.capital) > 0)) errors.capital = "Capital must be more than 0.";
   if (!(Number(d.riskPct) >= 0.05 && Number(d.riskPct) <= 10)) errors.riskPct = "Use between 0.05% and 10% per trade.";
   if (!CAPITAL_CURRENCIES.includes(d.currency)) errors.currency = "Pick a currency.";
@@ -26,13 +30,24 @@ function validate(d) {
 
 let refs = {};
 
-function renderTop() {
-  document.getElementById("top").replaceChildren(
-    UI.wordmark(),
-    UI.demoBadge(),
-    h("span", { class: "bar-spacer" }),
-    h("span", { class: "eyebrow" }, "v0.1.0"),
-  );
+function version() {
+  try {
+    return globalThis.chrome?.runtime?.getManifest?.().version || "0.2.0";
+  } catch {
+    return "0.2.0";
+  }
+}
+
+async function renderTop() {
+  const top = document.getElementById("top");
+  const draw = () => top.replaceChildren(UI.wordmark(), UI.dataBadge(), h("span", { class: "bar-spacer" }), h("span", { class: "eyebrow" }, `v${version()}`));
+  draw();
+  try {
+    UI.setData(await P.loadData());
+    draw();
+  } catch {
+    /* keep the default badge */
+  }
   document.getElementById("where").textContent = P.IS_EXTENSION ? "Settings · synced with your Chrome profile" : "Settings · preview mode, saved in this browser only";
 }
 
@@ -108,22 +123,34 @@ function build() {
   );
   refs.siteList = siteList;
 
+  const dataNote = h(
+    "div",
+    { class: "data-note" },
+    h("b", {}, "Live · beta"),
+    h("span", {}, "Real prices from free public sources, each labelled with its freshness and source. Signals come from engine v0, rule-based and uncalibrated. If the live API can't be reached, the extension says so and retries; it never shows made-up numbers."),
+  );
+
+  if (!acctPanel) acctPanel = createAccountPanel({ embedded: true, onLinked: () => P.toast("Linked. Your watchlist now syncs with your Tudumm account.", { tone: "ok", timeout: 4000 }) });
+
   const watchInfo = h("p", {}, "");
   refs.watchInfo = watchInfo;
   const clearWatch = UI.button("Clear watchlist", {
     small: true,
     onClick: async () => {
-      await P.storage.set("local", { watchlist: [] });
-      P.toast("Watchlist cleared", { tone: "ok" });
+      const res = await P.clearWatchlist();
+      if (res && res.ok === false) P.toast(res.error || "Couldn't clear the watchlist.", { tone: "warn", timeout: 5000 });
+      else P.toast(res && res.synced ? "Watchlist cleared here and in your account" : "Watchlist cleared", { tone: "ok" });
       refreshWatch();
     },
   });
   refs.clearWatch = clearWatch;
 
   $form.replaceChildren(
+    section("Tudumm account", "Optional. Link to sync your watchlist with the web terminal. Unlinking revokes the extension's key on Tudumm.", acctPanel.el),
+    section("Data", "What the popup, side panel and chip show.", dataNote),
     section(
-      "Tudumm terminal",
-      "“Open terminal” and “Open in Tudumm” open the instrument in the web app.",
+      "Tudumm web app",
+      "Live data, account linking, “Open terminal” and “Open in Tudumm” all use this address. https only; plain http is allowed for localhost while developing.",
       field("Web app URL", webUrl, h("span", {}, "Opens ", h("span", { class: "mono", id: "url-preview" }, ""), ". Test it: ", testLink), "webUrl"),
     ),
     section(
@@ -138,7 +165,11 @@ function build() {
       h("label", { class: "master" }, h("span", { class: "master-text" }, h("b", {}, "Show chip on supported sites"), h("span", {}, "Off hides the chip everywhere. The popup and side panel keep working.")), h("span", { class: "switch" }, master, h("i", { "aria-hidden": "true" }))),
       siteList,
     ),
-    section("Data", "Everything stays in your browser. All prices and signals are simulated.", h("div", { class: "data-row" }, watchInfo, clearWatch)),
+    section(
+      "Your data",
+      "Settings sync with your Chrome profile. The watchlist stays in this browser unless you link an account. The account key is stored only in this browser and sent only to the web app URL above.",
+      h("div", { class: "data-row" }, watchInfo, clearWatch),
+    ),
     UI.disclaimer(),
   );
 
@@ -214,6 +245,8 @@ async function doSave(e) {
     return;
   }
   const next = mergeSettings({ ...draft, webUrl: safeWebUrl(draft.webUrl), capital: Number(draft.capital), riskPct: Number(draft.riskPct) });
+  // A local dev API needs the optional localhost host permission (asked inside the click's gesture).
+  const access = P.requestDevHostAccess(next.webUrl);
   try {
     await P.saveSettings(next);
     saved = clone(next);
@@ -223,7 +256,12 @@ async function doSave(e) {
     update();
     const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     setStatus("saved", `Saved · ${t}`);
-    P.toast("Saved", { tone: "ok", timeout: 1800 });
+    const acc = await access;
+    if (acc === "denied") P.toast("Saved. Without access to localhost, live data from the local API can't load, so the extension shows an offline notice.", { tone: "warn", timeout: 6000 });
+    else P.toast("Saved", { tone: "ok", timeout: 1800 });
+    if (acctPanel) acctPanel.refresh({ caps: true });
+    UI.setData(await P.loadData({ force: true }).catch(() => null));
+    renderTop();
   } catch (err) {
     setStatus("error", `Couldn't save: ${err && err.message ? err.message : "storage error"}`);
   }

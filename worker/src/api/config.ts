@@ -5,6 +5,7 @@ import { emailConfigured } from "../lib/email";
 import { flagOn, loadFlags, PUBLIC_FLAGS, type FlagRow } from "../lib/flags";
 import { nowIso } from "../lib/db";
 import { LEGAL, PLANS } from "../lib/plans";
+import { kiteConfigured } from "../broker/kite";
 import type { Ctx, RouteDef } from "./context";
 
 export interface Capabilities {
@@ -18,6 +19,8 @@ export interface Capabilities {
   liveData: boolean;
   extensionLinking: boolean;
   signups: boolean;
+  /** Zerodha Kite Connect configured (KITE_API_KEY + KITE_API_SECRET). Owner-only feature. */
+  brokerKite: boolean;
 }
 
 export function razorpayConfigured(env: Env): boolean {
@@ -56,6 +59,7 @@ export function capabilities(env: Env, flags: Record<string, FlagRow>): Capabili
     liveData: flagOn(flags, "live_data"),
     extensionLinking: flagOn(flags, "extension_linking"),
     signups: flagOn(flags, "signups"),
+    brokerKite: kiteConfigured(env),
   };
 }
 

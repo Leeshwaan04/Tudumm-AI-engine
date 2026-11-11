@@ -1,13 +1,22 @@
 // GET /api/v1/market/universe — the seed.json shape with live data.
 import type { EngineView } from "../engine/types";
 import { GENESIS_HASH } from "../engine/ledger";
-import { INSTRUMENTS, LAYERS, MARKETS } from "./instruments";
+import { INSTRUMENTS, LAYERS, MARKETS, nseSessionOpen, servedFreshness } from "./instruments";
 import type { InstrumentDef } from "./types";
 import type { MarketDb, Row } from "./store";
 import { parseJson, stmt } from "./store";
 import type { SignalRow } from "./service";
 
 const STALE_SEC: Record<string, number> = { realtime: 1800, "delayed-15m": 4 * 86400, eod: 6 * 86400, "daily-ref": 6 * 86400 };
+
+/** Realtime India quotes are stale after 2 min without a push during the NSE session; outside it, the
+ *  last session's close stays valid over weekends and short holidays. */
+function isStale(i: InstrumentDef, freshness: string, asOf: string | null, now: number): boolean {
+  if (!asOf) return true;
+  const age = (now - Date.parse(asOf)) / 1000;
+  if (i.market === "IN" && freshness === "realtime") return nseSessionOpen(now) ? age > 120 : age > 4 * 86400;
+  return age > (STALE_SEC[freshness] ?? 86400);
+}
 
 export function ledgerOut(r: Row) {
   return {
@@ -125,7 +134,8 @@ export async function buildUniverse(db: MarketDb, now = Date.now()) {
   const instruments = INSTRUMENTS.filter((i) => !off.has(i.symbol)).map((i) => {
     const qr = q.get(i.symbol);
     const asOf = qr ? String(qr.as_of) : null;
-    const stale = asOf ? (now - Date.parse(asOf)) / 1000 > (STALE_SEC[i.freshness] ?? 86400) : true;
+    const freshness = servedFreshness(i, qr ? String(qr.source) : null);
+    const stale = isStale(i, freshness, asOf, now);
     const s = st.get(i.symbol);
     const o = op.get(i.symbol);
     const closed = lc.get(i.symbol) ?? null;
@@ -153,7 +163,7 @@ export async function buildUniverse(db: MarketDb, now = Date.now()) {
       // The venue that actually served the latest quote (e.g. Bybit when Binance refuses our egress).
       source: qr && qr.source ? String(qr.source) : i.source,
       proxyNote: qr && String(qr.source) === "bybit" && i.symbol === "XAUUSD" ? "XAUT (Tether Gold) on Bybit — tokenized gold used as a proxy for spot gold" : i.proxyNote,
-      freshness: i.freshness,
+      freshness,
       asOf,
       stale,
       hasData: !!qr,

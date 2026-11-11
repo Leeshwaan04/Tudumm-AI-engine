@@ -35,21 +35,8 @@ export function Toaster() {
   );
 }
 
-/* ---------- demo badge + disclaimer ---------- */
-export function DemoBadge() {
-  return (
-    <span className="demo-badge" title="All prices, signals and track-record data are simulated">
-      DEMO DATA
-    </span>
-  );
-}
-
-export const DISCLAIMER =
-  "Tudumm is a prototype. All prices, signals and track-record data are simulated. Nothing here is investment advice. Trading involves risk of loss.";
-
-export function Disclaimer({ className = "" }: { className?: string }) {
-  return <p className={`disclaimer ${className}`}>{DISCLAIMER}</p>;
-}
+/* ---------- disclaimer ---------- */
+export const DISCLAIMER = "Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss.";
 
 /* ---------- session clock ---------- */
 export function SessionDot({ state }: { state: string }) {

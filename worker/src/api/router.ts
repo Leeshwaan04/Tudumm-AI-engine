@@ -20,6 +20,7 @@ import { adminEngineRoutes } from "../admin/engine";
 import { adminOverviewRoutes } from "../admin/overview";
 import { adminSupportRoutes } from "../admin/support";
 import { adminUserRoutes } from "../admin/users";
+import { brokerRoutes } from "../broker/routes";
 import { alertRoutes } from "./alerts";
 import { authRoutes } from "./auth";
 import { billingRoutes } from "./billing";
@@ -65,6 +66,7 @@ const ROUTES: Compiled[] = [
   ...adminContentRoutes,
   ...adminSupportRoutes,
   ...adminEngineRoutes,
+  ...brokerRoutes, // Zerodha Kite (owner-only admin routes, Kite callback/postback, relay Bearer routes)
 ].map(compile);
 
 /** Exposed for docs/tests: every route as "METHOD path". */

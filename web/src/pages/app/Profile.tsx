@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Check, Copy, RotateCcw, X } from "lucide-react";
 import { toast } from "../../components/ui";
 import { useDocumentTitle } from "../../components/hooks";
-import { MARKET_LABEL, MARKET_ORDER, getInstrument, instrumentsIn } from "../../engine/seed";
+import { MARKET_LABEL, MARKET_ORDER, getInstrument, instrumentsIn } from "../../engine/universe";
 import type { MarketId } from "../../engine/types";
 import {
   CURRENCIES,
@@ -236,13 +236,13 @@ export default function Profile() {
 
         <section className="panel prof__sec prof__danger">
           <header className="panel__head">
-            <span className="eyebrow">Reset demo</span>
+            <span className="eyebrow">Reset this browser</span>
           </header>
           <div className="panel__body">
             <p className="t2">Clears your profile, watchlist and tracked signals from this browser and shows onboarding again.</p>
             {!confirm ? (
               <button type="button" className="btn btn--danger" onClick={() => setConfirm(true)}>
-                <RotateCcw size={14} aria-hidden="true" /> Reset demo
+                <RotateCcw size={14} aria-hidden="true" /> Reset local data
               </button>
             ) : (
               <div className="prof__confirm">

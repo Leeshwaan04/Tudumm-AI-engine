@@ -1,37 +1,42 @@
 // Preview showcase: mounts the real content-script chip on a mock chart page and
-// drives the real popup + side panel (in iframes) from the same simulated page.
-import { loadSeed, createEngine, mulberry32, hashString, terminalUrl, formatPct } from "./lib/engine.js";
+// drives the real popup + side panel (in iframes) from the same page.
+// Everything shown is live API data (or a recorded live snapshot with
+// ?universe=…): the mock page's chart draws real daily candles from
+// /api/v1/market/candles, or says there are none. Nothing is generated.
+import { createEngine, siteFor, terminalUrl, formatPct } from "./lib/engine.js";
 import { validateMessage, handleDetect, handleSnapshot } from "./lib/protocol.js";
 import * as P from "./lib/platform.js";
 import * as UI from "./lib/ui.js";
 
 const EXAMPLES = [
-  { label: "TradingView · chart · NSE:RELIANCE", url: "https://www.tradingview.com/chart/?symbol=NSE%3ARELIANCE", title: "RELIANCE 1,486.20 ▲ +0.99% Unnamed" },
+  { label: "TradingView · chart · NSE:RELIANCE", url: "https://www.tradingview.com/chart/?symbol=NSE%3ARELIANCE", title: "RELIANCE · Unnamed" },
   { label: "TradingView · symbol page · NSE-RELIANCE", url: "https://www.tradingview.com/symbols/NSE-RELIANCE/", title: "Reliance Industries Ltd. Stock Price | NSE:RELIANCE" },
   { label: "Yahoo Finance · RELIANCE.NS", url: "https://finance.yahoo.com/quote/RELIANCE.NS", title: "Reliance Industries Limited (RELIANCE.NS) Stock Price" },
   { label: "Yahoo Finance · BTC-USD", url: "https://finance.yahoo.com/quote/BTC-USD", title: "Bitcoin USD (BTC-USD) Price, Value, News & History" },
-  { label: "Yahoo Finance · EURUSD=X (FX: order flow N/A)", url: "https://finance.yahoo.com/quote/EURUSD=X", title: "EUR/USD (EURUSD=X) Live Rate, Chart & News" },
+  { label: "Yahoo Finance · EURUSD=X", url: "https://finance.yahoo.com/quote/EURUSD=X", title: "EUR/USD (EURUSD=X) Live Rate, Chart & News" },
   { label: "Yahoo Finance · GC=F (gold)", url: "https://finance.yahoo.com/quote/GC=F", title: "Gold Dec 26 (GC=F) Stock Price, News, Quote & History" },
   { label: "Yahoo Finance · ^NSEI (NIFTY 50)", url: "https://finance.yahoo.com/quote/%5ENSEI", title: "NIFTY 50 (^NSEI) Charts, Data & News" },
-  { label: "Yahoo Finance · TSLA (short)", url: "https://finance.yahoo.com/quote/TSLA", title: "Tesla, Inc. (TSLA) Stock Price, News, Quote & History" },
-  { label: "Yahoo Finance · ICICIBANK.NS (T1 hit)", url: "https://finance.yahoo.com/quote/ICICIBANK.NS", title: "ICICI Bank Limited (ICICIBANK.NS) Stock Price" },
+  { label: "Yahoo Finance · TSLA", url: "https://finance.yahoo.com/quote/TSLA", title: "Tesla, Inc. (TSLA) Stock Price, News, Quote & History" },
+  { label: "Yahoo Finance · ICICIBANK.NS", url: "https://finance.yahoo.com/quote/ICICIBANK.NS", title: "ICICI Bank Limited (ICICIBANK.NS) Stock Price" },
   { label: "Google Finance · RELIANCE:NSE", url: "https://www.google.com/finance/quote/RELIANCE:NSE", title: "Reliance Industries Ltd (RELIANCE) Stock Price & News - Google Finance" },
   { label: "Zerodha Kite · ciq NSE/RELIANCE", url: "https://kite.zerodha.com/chart/ext/ciq/NSE/RELIANCE/738561", title: "RELIANCE / Kite" },
-  { label: "Zerodha Kite · tvc NSE/SBIN (queued: reveals in 25s)", url: "https://kite.zerodha.com/chart/web/tvc/NSE/SBIN/779521", title: "SBIN / Kite" },
+  { label: "Zerodha Kite · tvc NSE/SBIN", url: "https://kite.zerodha.com/chart/web/tvc/NSE/SBIN/779521", title: "SBIN / Kite" },
   { label: "NSE India · get-quotes RELIANCE", url: "https://www.nseindia.com/get-quotes/equity?symbol=RELIANCE", title: "RELIANCE Share Price Today - NSE India" },
-  { label: "Binance · spot BTC_USDT", url: "https://www.binance.com/en/trade/BTC_USDT", title: "104,850.0 | BTCUSDT | Binance Spot" },
-  { label: "Binance · futures BTCUSDT", url: "https://www.binance.com/en/futures/BTCUSDT", title: "104,850.0 | BTCUSDT Perpetual | Binance Futures" },
-  { label: "Binance · spot SOL_USDT (queued: reveals in 55s)", url: "https://www.binance.com/en/trade/SOL_USDT", title: "182.60 | SOLUSDT | Binance Spot" },
-  { label: "Investing.com · title “Apple Inc (AAPL)…” (sitting out)", url: "https://www.investing.com/equities/apple-computer-inc", title: "Apple Inc (AAPL) Stock Price Today - Investing.com" },
-  { label: "Moneycontrol · title “Nifty Bank…” (sitting out)", url: "https://www.moneycontrol.com/indian-indices/nifty-bank-23.html", title: "Nifty Bank Live - Nifty Bank Index Today | Moneycontrol" },
-  { label: "TradingView · NASDAQ:AMZN (not covered yet)", url: "https://www.tradingview.com/chart/?symbol=NASDAQ%3AAMZN", title: "AMZN 229.10 ▲ +0.4% Unnamed" },
+  { label: "Binance · spot BTC_USDT", url: "https://www.binance.com/en/trade/BTC_USDT", title: "BTCUSDT | Binance Spot" },
+  { label: "Binance · futures BTCUSDT", url: "https://www.binance.com/en/futures/BTCUSDT", title: "BTCUSDT Perpetual | Binance Futures" },
+  { label: "Binance · spot SOL_USDT", url: "https://www.binance.com/en/trade/SOL_USDT", title: "SOLUSDT | Binance Spot" },
+  { label: "Investing.com · title “Apple Inc (AAPL)…”", url: "https://www.investing.com/equities/apple-computer-inc", title: "Apple Inc (AAPL) Stock Price Today - Investing.com" },
+  { label: "Moneycontrol · title “Nifty Bank…”", url: "https://www.moneycontrol.com/indian-indices/nifty-bank-23.html", title: "Nifty Bank Live - Nifty Bank Index Today | Moneycontrol" },
+  { label: "TradingView · NASDAQ:AMZN (not covered yet)", url: "https://www.tradingview.com/chart/?symbol=NASDAQ%3AAMZN", title: "AMZN · Unnamed" },
   { label: "google.com/search (unsupported site: no chip)", url: "https://www.google.com/search?q=reliance+share+price", title: "reliance share price - Google Search" },
 ];
 
 const $ = (id) => document.getElementById(id);
 const live = UI.createLive();
-let engine;
+let engine = null; // null while offline
+let payload = null;
 let chip;
+let candleReq = 0;
 let current = null; // { url, title }
 let det = null;
 let candles = null;
@@ -53,6 +58,12 @@ const chipEnv = {
   async send(raw) {
     const msg = validateMessage(raw);
     if (!msg) return { ok: false };
+    if (!engine && (msg.type === "detect" || msg.type === "snapshot")) {
+      // Same answer as the background when there's no live data.
+      const site = msg.type === "detect" ? siteFor(msg.url) : null;
+      if (msg.type === "snapshot") return { ok: false, offline: true, reasonText: payload && payload.reasonText };
+      return site ? { ok: true, offline: true, site: site.key, siteLabel: site.label, reasonText: payload && payload.reasonText, retryInMs: (payload && payload.retryInMs) || 15000 } : { ok: true, detection: null, snapshot: null };
+    }
     if (msg.type === "detect") return handleDetect(engine, msg);
     if (msg.type === "snapshot") return handleSnapshot(engine, msg);
     if (msg.type === "openSidePanel") {
@@ -89,22 +100,23 @@ const chipEnv = {
 
 // -------------------------------------------------------------- host page --
 
-function makeCandles(inst, n = 96) {
-  const rnd = mulberry32(hashString(`${inst.symbol}:host-chart`));
-  const vol = inst.assetClass === "crypto" ? 0.011 : inst.assetClass === "fx" ? 0.0018 : 0.0055;
-  const out = [];
-  let close = inst.price;
-  for (let i = 0; i < n; i++) {
-    const g = (rnd() + rnd() + rnd() - 1.5) * 1.6;
-    // walking backwards in time: a LONG setup should show an uptrend into "now"
-    const drift = inst.signal.direction === "LONG" ? 0.0011 : inst.signal.direction === "SHORT" ? -0.0011 : 0;
-    const open = close / (1 + g * vol + drift);
-    const hi = Math.max(open, close) * (1 + rnd() * vol * 0.7);
-    const lo = Math.min(open, close) * (1 - rnd() * vol * 0.7);
-    out.unshift({ open, close, hi, lo, v: 0.3 + rnd() });
-    close = open;
+/** Real daily candles for the mock chart from GET /api/v1/market/candles, or null. */
+async function loadCandles(inst, n = 96) {
+  const origin = payload && payload.origin;
+  if (!origin) return null;
+  try {
+    const signal = typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(7000) : undefined;
+    const res = await fetch(`${origin}/api/v1/market/candles?symbol=${encodeURIComponent(inst.symbol)}&tf=1D&limit=${n}`, { credentials: "omit", cache: "no-store", headers: { accept: "application/json" }, signal });
+    if (!res.ok || !/json/i.test(res.headers.get("content-type") || "")) return null;
+    const d = await res.json();
+    const ok = (b) => b && [b.o, b.h, b.l, b.c].every((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
+    const bars = (Array.isArray(d && d.bars) ? d.bars : []).filter(ok).slice(-n);
+    if (bars.length < 2) return null;
+    const vmax = Math.max(1e-9, ...bars.map((b) => (Number.isFinite(b.v) && b.v > 0 ? b.v : 0)));
+    return { tf: typeof d.tf === "string" ? d.tf.slice(0, 4) : "1D", bars: bars.map((b) => ({ open: b.o, close: b.c, hi: b.h, lo: b.l, v: Number.isFinite(b.v) && b.v > 0 ? b.v / vmax : 0 })) };
+  } catch {
+    return null;
   }
-  return out;
 }
 
 function drawChart() {
@@ -188,16 +200,30 @@ function renderHost() {
   const { h } = UI;
   const siteName = det && det.siteLabel ? det.siteLabel : "Web page";
   const nav = h("div", { class: "host-nav" }, h("span", { class: "host-logo" }, `${siteName} (mock)`), h("span", {}, "Markets"), h("span", {}, "Screener"), h("span", {}, "News"));
-  const inst = det && det.symbol ? engine.get(det.symbol) : null;
-  if (inst) {
+  const inst = det && det.symbol && engine ? engine.get(det.symbol) : null;
+  if (!engine) {
+    host.replaceChildren(
+      nav,
+      h(
+        "div",
+        { class: "host-empty" },
+        h("b", {}, "Live data temporarily unavailable — retrying"),
+        h("span", {}, (payload && payload.reasonText) || "The Tudumm market API didn't answer."),
+        h("button", { type: "button", class: "btn btn--sm", onclick: () => location.reload() }, "Retry now"),
+      ),
+    );
+  } else if (inst && !(inst.price > 0)) {
+    host.replaceChildren(nav, h("div", { class: "host-sym" }, h("h2", {}, inst.symbol), h("span", { class: "sub" }, `${inst.name} · ${inst.exchange}`)), h("div", { class: "host-empty" }, h("b", {}, "No price yet"), h("span", {}, "The live API has no quote for this instrument yet, so there is nothing to chart.")));
+  } else if (inst) {
     const px = h("span", { class: "px" });
     const ch = h("span", { class: "ch" });
     const setPx = (now) => {
       const q = engine.quote(inst.symbol, now);
       px.textContent = UI.h("span").textContent || engine.snapshot(inst.symbol, now).priceText;
-      ch.textContent = `${q.change >= 0 ? "+" : "−"}${Math.abs(q.change).toFixed(inst.decimals)} (${formatPct(q.changePct)})`;
-      ch.className = `ch ${q.change >= 0 ? "up" : "dn"}`;
-      if (candles) {
+      ch.textContent = q.change == null ? (q.changePct == null ? "" : formatPct(q.changePct)) : `${q.change >= 0 ? "+" : "−"}${Math.abs(q.change).toFixed(inst.decimals)} (${formatPct(q.changePct)})`;
+      ch.className = `ch ${(q.change ?? q.changePct ?? 0) >= 0 ? "up" : "dn"}`;
+      // Only a real-time quote belongs in today's bar (delayed / end-of-day prices don't).
+      if (candles && q.price != null && inst.freshness === "realtime") {
         const c = candles[candles.length - 1];
         c.close = q.price;
         c.hi = Math.max(c.hi, q.price);
@@ -205,10 +231,21 @@ function renderHost() {
         drawChart();
       }
     };
-    candles = makeCandles(inst);
-    canvas = h("canvas", { "aria-label": `Mock price chart for ${inst.symbol}`, role: "img" });
-    const chart = h("div", { class: "host-chart" }, canvas, h("div", { class: "host-tf" }, ["15m", "1H", "4H", "1D", "1W"].map((t) => h("span", { class: t === (inst.signal.timeframe || "1D") ? "on" : "" }, t))));
+    const chart = h("div", { class: "host-chart" }, h("div", { class: "host-empty" }, h("b", {}, "Loading daily candles…")));
     host.replaceChildren(nav, h("div", { class: "host-sym" }, h("h2", {}, inst.symbol), h("span", { class: "sub" }, `${inst.name} · ${inst.exchange}`), px, ch), chart);
+    const req = ++candleReq;
+    loadCandles(inst).then((got) => {
+      if (req !== candleReq) return;
+      if (!got) {
+        chart.replaceChildren(h("div", { class: "host-empty" }, h("b", {}, "No chart"), h("span", {}, "The Tudumm API has no candles for this instrument here, so nothing is drawn.")));
+        return;
+      }
+      candles = got.bars;
+      canvas = h("canvas", { "aria-label": `Daily candles for ${inst.symbol} from the Tudumm API`, role: "img" });
+      chart.replaceChildren(canvas, h("div", { class: "host-tf" }, ["1D"].map((t) => h("span", { class: t === got.tf ? "on" : "" }, t))));
+      setPx(Date.now());
+      requestAnimationFrame(drawChart);
+    });
     let lastTick = null;
     setPx(Date.now());
     hostUnsub = live.subscribe((now) => {
@@ -220,7 +257,7 @@ function renderHost() {
     });
     requestAnimationFrame(drawChart);
   } else if (det && det.ticker) {
-    host.replaceChildren(nav, h("div", { class: "host-sym" }, h("h2", {}, det.ticker), h("span", { class: "sub" }, "Mock page · no simulated data for this ticker")), h("div", { class: "host-empty" }, h("b", {}, `${det.ticker} chart`), h("span", {}, "Tudumm detects the ticker but doesn't cover it yet, so the chip says so.")));
+    host.replaceChildren(nav, h("div", { class: "host-sym" }, h("h2", {}, det.ticker), h("span", { class: "sub" }, "Mock page · Tudumm has no data for this ticker")), h("div", { class: "host-empty" }, h("b", {}, `${det.ticker} chart`), h("span", {}, "Tudumm detects the ticker but doesn't cover it yet, so the chip says so.")));
   } else {
     host.replaceChildren(
       h("div", { class: "host-nav" }, h("span", { class: "host-logo" }, "Unsupported page (mock)")),
@@ -255,6 +292,10 @@ function describe(d) {
   const el = $("detect-result");
   el.replaceChildren();
   const { h } = UI;
+  if (!engine) {
+    el.append(h("span", { class: "miss" }, `No live data: ${(payload && payload.reasonText) || "the Tudumm API didn't answer."} The chip and popup say so instead of showing numbers.`));
+    return;
+  }
   if (!d || !d.site) {
     el.append(h("span", { class: "miss" }, "Not a supported site → no chip, popup shows “No supported symbol on this page”."));
     return;
@@ -274,6 +315,8 @@ function describe(d) {
 function framesTo(page, initial) {
   const qs = (extra) => {
     const p = new URLSearchParams({ url: page.url, title: page.title || "", ...extra });
+    // Pass a recorded live universe through to the frames (preview only).
+    if (P.PARAMS.get("universe")) p.set("universe", P.PARAMS.get("universe"));
     return p.toString();
   };
   if (initial) {
@@ -292,7 +335,8 @@ function framesTo(page, initial) {
 
 function simulate(page, { initial = false } = {}) {
   current = page;
-  det = engine.detect(page.url, page.title);
+  const site = siteFor(page.url);
+  det = engine ? engine.detect(page.url, page.title) : site ? { site: site.key, siteLabel: site.label, symbol: null, ticker: null } : null;
   $("url").textContent = page.url;
   $("tab-title").textContent = page.title || new URL(page.url).hostname;
   renderHost();
@@ -304,9 +348,11 @@ function simulate(page, { initial = false } = {}) {
 async function init() {
   document.documentElement.dataset.booted = "1";
   const brand = $("brand");
-  brand.replaceWith(UI.h("span", { class: "pv-brand-mark", style: { display: "inline-flex", gap: "12px", alignItems: "center" } }, UI.wordmark(), UI.demoBadge()));
+  payload = await P.loadData();
+  UI.setData(payload);
+  brand.replaceWith(UI.h("span", { class: "pv-brand-mark", style: { display: "inline-flex", gap: "12px", alignItems: "center" } }, UI.wordmark(), UI.dataBadge()));
 
-  engine = createEngine(await loadSeed());
+  engine = payload && payload.mode === "live" && payload.universe ? createEngine(payload.universe) : null;
   chipEnv.container = $("viewport");
   if (!window.TudummChip) throw new Error("content.js renderer missing");
   chip = window.TudummChip.create(chipEnv);
@@ -318,7 +364,9 @@ async function init() {
   sel.addEventListener("change", () => {
     const ex = EXAMPLES[Number(sel.value)];
     try {
-      history.replaceState(null, "", `?ex=${sel.value}`);
+      const q = new URLSearchParams({ ex: sel.value });
+      if (P.PARAMS.get("universe")) q.set("universe", P.PARAMS.get("universe"));
+      history.replaceState(null, "", `?${q}`);
     } catch {
       /* file:// */
     }

@@ -1,105 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Copy, FlaskConical, RotateCcw, ShieldAlert, ShieldCheck } from "lucide-react";
-import { EquityCurve } from "../../components/charts";
+import { ChevronLeft, ChevronRight, Copy, FlaskConical, RefreshCw, RotateCcw, ShieldAlert, ShieldCheck } from "lucide-react";
 import { EmptyState, toast } from "../../components/ui";
-import { useDocumentTitle, useReducedMotion } from "../../components/hooks";
-import { getInstrument, ledger as LEDGER, MARKET_ORDER, MARKET_SHORT, seed, STYLE_LABEL } from "../../engine/seed";
-import type { LedgerEntry, MarketId, Outcome, Style } from "../../engine/types";
-import { breakdown, computeStats, equityCurve, hasWebCrypto, monthlyGrid, verifyChain, type VerifyResult } from "../../engine/ledger";
+import { useDocumentTitle } from "../../components/hooks";
+import { EngineTag, fmtAsOf } from "../../components/badges";
+import { getInstrument } from "../../engine/universe";
+import type { Instrument } from "../../engine/types";
+import { hasWebCrypto, sha256Hex } from "../../engine/ledger";
 import { fmtLevel, MINUS, shortHash } from "../../engine/format";
-
-const GENESIS = seed.meta.ledgerGenesisPrevHash;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const OUTCOME_LABEL: Record<Outcome, string> = { target: "Target", trailed: "Trailed", expired: "Expired", stopped: "Stopped" };
-const PAGE = 20;
+import { marketApi, type LedgerEntryV2, type LedgerHead } from "../../api/market";
+import { track } from "../../api/events";
 
 const signedR = (v: number, d = 2) => `${v > 0 ? "+" : v < 0 ? MINUS : ""}${Math.abs(v).toFixed(d)}R`;
-function fmtL(e: LedgerEntry, v: number) {
-  const inst = getInstrument(e.symbol);
-  return inst ? fmtLevel(inst, v) : String(v);
-}
 
 type CellState = "idle" | "ok" | "bad" | "skip";
 
+/** Live ledger only: engine v0's real calls, verified in the browser (no simulated ledger). */
 export default function Proof() {
   useDocumentTitle("Proof · Tudumm");
-  const stats = useMemo(() => computeStats(LEDGER), []);
-  const curve = useMemo(() => equityCurve(LEDGER), []);
-  const grid = useMemo(() => monthlyGrid(LEDGER), []);
-
-  // working copy for the tamper test (in memory only)
-  const [entries, setEntries] = useState<LedgerEntry[]>(LEDGER);
-  const [tampered, setTampered] = useState<{ id: string; from: number; to: number } | null>(null);
-  const [cells, setCells] = useState<CellState[]>(() => LEDGER.map(() => "idle"));
-  const [running, setRunning] = useState(false);
-  const [cursor, setCursor] = useState<{ id: string; hash: string } | null>(null);
-  const [result, setResult] = useState<VerifyResult | null>(null);
-  const cancel = useRef({ cancelled: false });
-  const reduced = useReducedMotion();
-
-  useEffect(() => () => void (cancel.current.cancelled = true), []);
-
-  const runVerify = async () => {
-    cancel.current.cancelled = true;
-    const token = { cancelled: false };
-    cancel.current = token;
-    setRunning(true);
-    setResult(null);
-    const next: CellState[] = entries.map(() => "idle");
-    setCells(next);
-    let lastPaint = 0;
-    const res = await verifyChain(entries, GENESIS, {
-      paceMs: reduced ? 0 : 14,
-      batch: 4,
-      signal: token,
-      onStep: (s) => {
-        next[s.index] = s.ok ? "ok" : "bad";
-        const now = performance.now();
-        if (!s.ok || now - lastPaint > 30) {
-          lastPaint = now;
-          setCells([...next]);
-          setCursor({ id: s.id, hash: s.computed });
-        }
-      },
-    });
-    if (token.cancelled) return;
-    if (!res.ok && res.breakAt) for (let i = res.breakAt.index + 1; i < next.length; i++) next[i] = "skip";
-    setCells([...next]);
-    setResult(res);
-    setRunning(false);
-  };
-
-  const applyTamper = (id: string, exit: number) => {
-    const base = LEDGER.find((e) => e.id === id);
-    if (!base) return;
-    setEntries(LEDGER.map((e) => (e.id === id ? { ...e, exit } : e)));
-    setTampered({ id, from: base.exit, to: exit });
-    setResult(null);
-    setCells(LEDGER.map(() => "idle"));
-    toast(`${id} exit edited in memory: ${fmtL(base, base.exit)} → ${fmtL(base, exit)}. Now verify the chain.`);
-  };
-  const resetTamper = () => {
-    cancel.current.cancelled = true;
-    setRunning(false);
-    setEntries(LEDGER);
-    setTampered(null);
-    setResult(null);
-    setCells(LEDGER.map(() => "idle"));
-    setCursor(null);
-  };
-
-  const kpis: [string, string, string?][] = [
-    ["Closed calls", String(stats.count)],
-    ["Win rate", `${(stats.winRate * 100).toFixed(1)}%`],
-    ["Avg win", signedR(stats.avgWin), "c-long"],
-    ["Avg loss", signedR(stats.avgLoss), "c-short"],
-    ["Expectancy / call", signedR(stats.expectancy), "c-brand"],
-    ["Profit factor", stats.profitFactor.toFixed(2)],
-    ["Total", signedR(stats.totalR, 1)],
-    ["Max drawdown", signedR(stats.maxDrawdown, 1), "c-short"],
-  ];
-
   return (
     <div className="proof">
       <header className="phead">
@@ -111,525 +29,570 @@ export default function Proof() {
         </div>
         <div className="proof__intro">
           <p className="phead__note">
-            This demo ledger is simulated. In production, each call is hashed at the moment it’s issued and the chain head is published so
-            anyone can audit it.
+            Engine v0’s live calls are hashed onto an append-only chain when they’re published and again when they close. Recompute it yourself below.
           </p>
-          <div className="proof__chips">
-            <span className="chip chip--brand">Simulated demo ledger</span>
-            <span className="chip">SHA-256 · hash-chained</span>
-            <span className="chip chip--hash">
-              head {shortHash(LEDGER[LEDGER.length - 1].hash, 10)}…
-            </span>
-          </div>
         </div>
       </header>
 
-      <dl className="pkpis mono">
-        {kpis.map(([k, v, cls]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd className={cls}>{v}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="proof__fine">All figures are computed in your browser from the {LEDGER.length} ledger entries below. Win = R above zero.</p>
-
-      <ChainPanel
-        entries={entries}
-        cells={cells}
-        running={running}
-        cursor={cursor}
-        result={result}
-        tampered={tampered}
-        onVerify={runVerify}
-        onTamper={applyTamper}
-        onReset={resetTamper}
-      />
-
-      <section className="panel proof__chart">
-        <header className="panel__head">
-          <span className="eyebrow">Cumulative R and drawdown</span>
-          <span className="mono t3 proof__meta">
-            {curve.length} closed calls · {new Date(curve[0].t).toLocaleDateString("en-GB", { month: "short", year: "numeric" })} →{" "}
-            {new Date(curve[curve.length - 1].t).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
-          </span>
-        </header>
-        <div className="panel__body">
-          <EquityCurve points={curve} height={280} drawdown ddHeight={110} />
-        </div>
-      </section>
-
-      <div className="proof__two">
-        <MonthlyHeatmap grid={grid} />
-        <Breakdowns />
+      <div className="proof__panel">
+        <LiveLedger />
       </div>
-
-      <LedgerTable entries={entries} cells={cells} tamperedId={tampered?.id ?? null} onPickTamper={(id) => {
-          setPick(id);
-          document.getElementById("tamper")?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }}
-      />
     </div>
   );
 }
 
-/* tamper pick is shared between table and panel via a tiny module-level store */
-const pickListeners = new Set<(id: string) => void>();
-function setPick(id: string) {
-  pickListeners.forEach((l) => l(id));
-}
-function usePick(initial: string): [string, (id: string) => void] {
-  const [v, setV] = useState(initial);
-  useEffect(() => {
-    const l = (id: string) => setV(id);
-    pickListeners.add(l);
-    return () => {
-      pickListeners.delete(l);
-    };
-  }, []);
-  return [v, setV];
+/* =====================================================================
+   Live ledger (v2 hash chain, GET /api/v1/market/ledger + /ledger/head)
+   ===================================================================== */
+const V2_GENESIS = "0".repeat(64);
+const JUDGE_MIN = 30;
+
+interface V2Result {
+  ok: boolean;
+  verified: number;
+  total: number;
+  headHash: string | null;
+  brokenAt: { seq: number; index: number; stored: string; computed: string; prevMismatch: boolean } | null;
+  ms: number;
 }
 
-/* ---------------- chain panel ---------------- */
-function ChainPanel({
-  entries,
-  cells,
-  running,
-  cursor,
-  result,
-  tampered,
-  onVerify,
-  onTamper,
-  onReset,
-}: {
-  entries: LedgerEntry[];
-  cells: CellState[];
-  running: boolean;
-  cursor: { id: string; hash: string } | null;
-  result: VerifyResult | null;
-  tampered: { id: string; from: number; to: number } | null;
-  onVerify: () => void;
-  onTamper: (id: string, exit: number) => void;
-  onReset: () => void;
-}) {
-  const [pick, setPickLocal] = usePick("T00157");
-  const base = LEDGER.find((e) => e.id === pick) ?? LEDGER[156];
-  const [exitStr, setExitStr] = useState("");
+/** Exactly the README-market v2 rule: sha256hex(JSON.stringify([prevHash, seq, type, signalId, …, at])). */
+function v2Canonical(prev: string, e: LedgerEntryV2): string {
+  return JSON.stringify([
+    prev,
+    e.seq,
+    e.type,
+    e.signalId,
+    e.symbol,
+    e.direction,
+    e.entryLow,
+    e.entryHigh,
+    e.stop,
+    e.target1,
+    e.target2,
+    e.exit ?? null,
+    e.outcome ?? null,
+    e.r ?? null,
+    e.at,
+  ]);
+}
+
+async function verifyV2(entries: LedgerEntryV2[], onStep?: (i: number, ok: boolean) => void): Promise<V2Result> {
+  const t0 = performance.now();
+  let prev = V2_GENESIS;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const h = await sha256Hex(v2Canonical(prev, e));
+    const prevMismatch = e.prevHash !== prev;
+    if (prevMismatch || e.hash !== h) {
+      onStep?.(i, false);
+      return { ok: false, verified: i, total: entries.length, headHash: null, brokenAt: { seq: e.seq, index: i, stored: e.hash, computed: h, prevMismatch }, ms: performance.now() - t0 };
+    }
+    onStep?.(i, true);
+    prev = h;
+  }
+  return { ok: true, verified: entries.length, total: entries.length, headHash: entries.length ? prev : V2_GENESIS, brokenAt: null, ms: performance.now() - t0 };
+}
+
+function instFor(symbol: string): Instrument | undefined {
+  return getInstrument(symbol);
+}
+function lv(e: LedgerEntryV2, v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  const inst = instFor(e.symbol);
+  return inst ? fmtLevel(inst, v) : v.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+function fmtAt(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return `${d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" })} ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })}`;
+}
+const OUTCOME_V2: Record<string, string> = { target: "Target", trailed: "Trailed", stopped: "Stopped", expired: "Expired", invalidated: "Invalidated" };
+
+type LivePhase = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready" };
+
+function LiveLedger() {
+  const [phase, setPhase] = useState<LivePhase>({ kind: "loading" });
+  const [entries, setEntries] = useState<LedgerEntryV2[]>([]);
+  const [head, setHead] = useState<LedgerHead | null>(null);
+  const [headErr, setHeadErr] = useState(false);
+  const [work, setWork] = useState<LedgerEntryV2[]>([]);
+  const [cells, setCells] = useState<CellState[]>([]);
+  const [result, setResult] = useState<V2Result | null>(null);
+  const [running, setRunning] = useState(false);
+  const [tampered, setTampered] = useState<{ seq: number; field: "exit" | "stop"; from: number | null; to: number } | null>(null);
+  const runToken = useRef(0);
+
+  const verify = useCallback(async (list: LedgerEntryV2[], user: boolean) => {
+    const token = ++runToken.current;
+    setRunning(true);
+    setResult(null);
+    const next: CellState[] = list.map(() => "idle");
+    setCells(next);
+    const res = await verifyV2(list, (i, ok) => {
+      next[i] = ok ? "ok" : "bad";
+    });
+    if (token !== runToken.current) return;
+    if (!res.ok && res.brokenAt) for (let i = res.brokenAt.index + 1; i < next.length; i++) next[i] = "skip";
+    setCells([...next]);
+    setResult(res);
+    setRunning(false);
+    if (user) track("verify_chain", { ledger: "live", ok: res.ok, n: list.length });
+  }, []);
+
+  const load = useCallback(async () => {
+    setPhase({ kind: "loading" });
+    setTampered(null);
+    setResult(null);
+    try {
+      const [all, h] = await Promise.all([
+        marketApi.ledgerAll(),
+        marketApi.ledgerHead().catch(() => null),
+      ]);
+      setEntries(all);
+      setWork(all);
+      setHead(h);
+      setHeadErr(h === null);
+      setPhase({ kind: "ready" });
+      void verify(all, false);
+    } catch (err) {
+      const unreachable = (err as { unreachable?: boolean; status?: number })?.unreachable || (err as { status?: number })?.status === 0;
+      setPhase({
+        kind: "error",
+        message: unreachable ? "The Tudumm market API can’t be reached right now, so the live ledger can’t be loaded." : "The live ledger didn’t load. Try again in a moment.",
+      });
+    }
+  }, [verify]);
+
   useEffect(() => {
-    const bumped = base.exit * 1.012;
-    const inst = getInstrument(base.symbol);
-    const d = inst?.decimals ?? 2;
-    setExitStr(bumped.toFixed(d));
-  }, [base]);
-  const exit = Number(exitStr);
-  const exitOk = Number.isFinite(exit) && exit > 0 && exit !== base.exit;
-  const done = cells.filter((c) => c === "ok").length;
-  const head = entries[entries.length - 1].hash;
+    void load();
+    return () => {
+      runToken.current++;
+    };
+  }, [load]);
+
+  const closes = useMemo(() => entries.filter((e) => e.type === "close"), [entries]);
+  const stats = useMemo(() => {
+    const rs = closes.map((e) => (typeof e.r === "number" && Number.isFinite(e.r) ? e.r : 0));
+    const n = rs.length;
+    const wins = rs.filter((r) => r > 0).length;
+    const losses = rs.filter((r) => r < 0).length;
+    const total = rs.reduce((a, b) => a + b, 0);
+    return { n, wins, losses, flat: n - wins - losses, total, avg: n ? total / n : 0 };
+  }, [closes]);
+  const openCalls = useMemo(() => {
+    const closed = new Set(closes.map((e) => e.signalId));
+    return entries.filter((e) => e.type === "issue" && !closed.has(e.signalId)).length;
+  }, [entries, closes]);
+
+  if (phase.kind === "loading") {
+    return (
+      <section className="panel lled__state" aria-busy="true">
+        <span className="chain__spin" aria-hidden="true" />
+        <p className="t2">Loading the live ledger and recomputing its hashes…</p>
+      </section>
+    );
+  }
+  if (phase.kind === "error") {
+    return (
+      <section className="panel lled__state lled__state--err" role="alert">
+        <ShieldAlert size={18} aria-hidden="true" />
+        <div>
+          <p className="lled__state-title">Live ledger unavailable</p>
+          <p className="t2">{phase.message}</p>
+        </div>
+        <button type="button" className="btn btn--sm" onClick={() => void load()}>
+          <RefreshCw size={13} aria-hidden="true" /> Retry
+        </button>
+      </section>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="lled">
+        <LiveTopline head={head} headErr={headErr} />
+        <section className="panel">
+          <div className="panel__body">
+            <EmptyState
+              title="The live ledger is empty — engine v0 hasn’t published a call yet."
+              action={
+                <button type="button" className="btn" onClick={() => void load()}>
+                  <RefreshCw size={14} aria-hidden="true" /> Check again
+                </button>
+              }
+            >
+              Calls are written here the moment they become visible, and again when they close. Sitting out writes nothing. Until the first call,
+              the chain is just its genesis hash ({shortHash(V2_GENESIS, 8)}…).
+            </EmptyState>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  const computedHead = result?.ok ? result.headHash : null;
+  const published = head?.headHash ?? null;
+  const lastSeq = entries[entries.length - 1].seq;
+  const headAhead = head && typeof head.count === "number" && head.count > entries.length;
+  const headMatch = computedHead && published ? computedHead === published : null;
+
+  const applyTamper = (seq: number, field: "exit" | "stop", to: number) => {
+    const base = entries.find((e) => e.seq === seq);
+    if (!base) return;
+    const copy = entries.map((e) => (e.seq === seq ? { ...e, [field]: to } : e));
+    setWork(copy);
+    setTampered({ seq, field, from: base[field], to });
+    track("tamper_test", { ledger: "live" });
+    toast(`Entry #${seq} ${field} edited in memory. Verifying…`);
+    void verify(copy, false);
+  };
+  const resetTamper = () => {
+    setTampered(null);
+    setWork(entries);
+    void verify(entries, false);
+  };
 
   return (
-    <section className="panel chain" aria-label="Chain verification">
-      <div className="chain__main">
-        <div className="chain__head">
-          <div>
-            <p className="eyebrow">Verify the chain</p>
-            <h2 className="chain__title serif">
-              Recompute all {entries.length} hashes <em>in your browser.</em>
-            </h2>
-            <p className="chain__copy">
-              Each entry’s hash is SHA-256 of its previous hash plus its id, times, symbol, direction, entry, stop, target, exit and R. Edit
-              any one of those and every hash after it stops matching.
+    <div className="lled">
+      <LiveTopline head={head} headErr={headErr} />
+
+      <div className={`judge ${stats.n < JUDGE_MIN ? "is-few" : ""}`} role="note">
+        <p className="judge__big serif">
+          {stats.n < JUDGE_MIN ? (
+            <>
+              {stats.n} closed {stats.n === 1 ? "call" : "calls"} — <em>too few to judge.</em>
+            </>
+          ) : (
+            <>
+              {stats.n} closed calls <em>on the record.</em>
+            </>
+          )}
+        </p>
+        <p className="judge__copy">
+          {stats.n < JUDGE_MIN
+            ? `Win rates and averages over fewer than ${JUDGE_MIN} closed calls are mostly noise. They’re shown below for transparency, not as evidence of an edge.`
+            : "Results are computed in your browser from the close entries below. Engine v0 is uncalibrated; read them as a record, not a promise."}
+        </p>
+      </div>
+
+      <dl className="pkpis lled__kpis mono">
+        <div>
+          <dt>Closed calls</dt>
+          <dd>{stats.n}</dd>
+        </div>
+        <div>
+          <dt>Open (published)</dt>
+          <dd>{openCalls}</dd>
+        </div>
+        <div>
+          <dt>Wins / losses</dt>
+          <dd>
+            <span className="c-long">{stats.wins}</span> / <span className="c-short">{stats.losses}</span>
+            {stats.flat ? <span className="t3"> · {stats.flat} flat</span> : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Avg R / call</dt>
+          <dd className={stats.n ? (stats.avg >= 0 ? "c-long" : "c-short") : "t3"}>{stats.n ? signedR(stats.avg) : "—"}</dd>
+        </div>
+        <div>
+          <dt>Total R</dt>
+          <dd className={stats.n ? (stats.total >= 0 ? "c-long" : "c-short") : "t3"}>{stats.n ? signedR(stats.total, 1) : "—"}</dd>
+        </div>
+      </dl>
+      <p className="proof__fine">
+        From {entries.length} ledger {entries.length === 1 ? "entry" : "entries"} (seq 1–{lastSeq}). R = result in multiples of the risk taken; an unfilled call that expires
+        counts as 0R.
+      </p>
+
+      <section className="panel chain" aria-label="Live chain verification">
+        <div className="chain__main">
+          <div className="chain__head">
+            <div>
+              <p className="eyebrow">Verify the live chain</p>
+              <h2 className="chain__title serif">
+                Recompute all {work.length} hashes <em>in your browser.</em>
+              </h2>
+              <p className="chain__copy">
+                Each hash is SHA-256 of the previous hash plus the entry’s seq, type, signal id, symbol, direction, entry zone, stop, both targets,
+                exit, outcome, R and time — the v2 rule published in the API docs. Change any field and every hash after it stops matching.
+              </p>
+            </div>
+            <div className="chain__acts">
+              <button type="button" className="btn btn--primary" onClick={() => void verify(work, true)} disabled={running}>
+                <ShieldCheck size={15} aria-hidden="true" /> {running ? "Verifying…" : "Verify again"}
+              </button>
+            </div>
+          </div>
+
+          <div className="tape lled__tape" role="img" aria-label={`Verification: ${cells.filter((c) => c === "ok").length} of ${work.length} entries verified`}>
+            {cells.map((c, i) => (
+              <i key={i} className={`tape__c is-${c} ${tampered && work[i]?.seq === tampered.seq ? "is-edited" : ""}`} title={`#${work[i]?.seq}`} />
+            ))}
+          </div>
+
+          <div className={`chain__status mono ${result ? (result.ok ? "is-ok" : "is-bad") : ""}`} aria-live="polite">
+            {running && (
+              <>
+                <span className="chain__spin" aria-hidden="true" /> Recomputing {work.length} hashes…
+              </>
+            )}
+            {!running && result?.ok && (
+              <>
+                <ShieldCheck size={16} aria-hidden="true" />
+                <b>Chain intact</b> · {result.verified}/{result.total} · head {shortHash(result.headHash ?? "", 8)}… · {hasWebCrypto ? "Web Crypto" : "JS SHA-256"} ·{" "}
+                {result.ms.toFixed(0)} ms
+              </>
+            )}
+            {!running && result && !result.ok && result.brokenAt && (
+              <>
+                <ShieldAlert size={16} aria-hidden="true" />
+                <b>Chain broken at #{result.brokenAt.seq}</b> · {result.verified} verified before it ·{" "}
+                {result.brokenAt.prevMismatch
+                  ? "its prevHash doesn’t match the hash before it"
+                  : `stored ${shortHash(result.brokenAt.stored, 8)}… ≠ recomputed ${shortHash(result.brokenAt.computed, 8)}…`}
+              </>
+            )}
+          </div>
+
+          <div className="lled__heads mono">
+            <div className="lled__hrow">
+              <span className="t3">Computed head</span>
+              <span className="lled__h" title={computedHead ?? undefined}>
+                {computedHead ? `${shortHash(computedHead, 20)}…` : running ? "computing…" : "— (chain broken)"}
+              </span>
+            </div>
+            <div className="lled__hrow">
+              <span className="t3">Published head</span>
+              <span className="lled__h" title={published ?? undefined}>
+                {published ? `${shortHash(published, 20)}…` : headErr ? "unavailable" : "—"}
+              </span>
+              {published && (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() =>
+                    navigator.clipboard?.writeText(published).then(
+                      () => toast("Published head copied"),
+                      () => toast("Copy blocked by the browser"),
+                    ) ?? toast("Copy isn’t available here")
+                  }
+                >
+                  <Copy size={13} aria-hidden="true" /> Copy
+                </button>
+              )}
+            </div>
+            <p className={`lled__match ${headMatch === true ? "c-long" : headMatch === false ? "c-short" : "t3"}`}>
+              {headMatch === true && !tampered && "✓ Matches /ledger/head — what you verified is what the server publishes."}
+              {headMatch === false && !headAhead && "✗ Doesn’t match the published head."}
+              {headMatch === false && headAhead && "The ledger grew while this page loaded. Reload to verify the newest entries."}
+              {headMatch === null && tampered && "Tampered copy: the computed head can’t match until you reset."}
+              {headMatch === null && !tampered && headErr && "Couldn’t fetch /ledger/head to compare."}
             </p>
           </div>
-          <div className="chain__acts">
-            <button type="button" className="btn btn--primary" onClick={onVerify} disabled={running}>
-              <ShieldCheck size={15} aria-hidden="true" /> {running ? "Verifying…" : result ? "Verify again" : "Verify chain"}
-            </button>
-          </div>
         </div>
 
-        <div className="tape" role="img" aria-label={`Verification progress: ${done} of ${entries.length} entries verified`}>
-          {cells.map((c, i) => (
-            <i key={i} className={`tape__c is-${c} ${tampered && entries[i].id === tampered.id ? "is-edited" : ""}`} title={entries[i].id} />
-          ))}
-        </div>
+        <LiveTamper entries={entries} running={running} tampered={tampered} onTamper={applyTamper} onReset={resetTamper} />
+      </section>
 
-        <div className={`chain__status mono ${result ? (result.ok ? "is-ok" : "is-bad") : ""}`} aria-live="polite">
-          {running && cursor && (
-            <>
-              <span className="chain__spin" aria-hidden="true" /> {done}/{entries.length} · {cursor.id} · {shortHash(cursor.hash, 16)}…
-            </>
-          )}
-          {!running && !result && (
-            <>
-              {tampered ? (
-                <span className="c-short">
-                  {tampered.id} was edited in memory. Run the verification to see where the chain breaks.
-                </span>
-              ) : (
-                <span className="t2">Not verified yet in this session. Hash engine: {hasWebCrypto ? "Web Crypto (SHA-256)" : "JS fallback (SHA-256)"}.</span>
-              )}
-            </>
-          )}
-          {result?.ok && (
-            <>
-              <ShieldCheck size={16} aria-hidden="true" />
-              <b>Chain intact</b> · {result.verified}/{result.total} · head {shortHash(result.head, 6)}… · {result.engine} · {result.ms.toFixed(0)} ms
-            </>
-          )}
-          {result && !result.ok && result.breakAt && (
-            <>
-              <ShieldAlert size={16} aria-hidden="true" />
-              <b>Chain broken at {result.breakAt.id}</b> · row {result.breakAt.index + 1} of {result.total} · {result.verified} verified before it ·
-              stored {shortHash(result.breakAt.stored, 8)}… ≠ recomputed {shortHash(result.breakAt.computed, 8)}…
-            </>
-          )}
-        </div>
-        <div className="chain__head-hash mono">
-          <span className="t3">Published head (from seed)</span>
-          <span className="chain__hash">{head}</span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() =>
-              navigator.clipboard?.writeText(head).then(
-                () => toast("Chain head copied"),
-                () => toast("Copy blocked by the browser"),
-              ) ?? toast("Copy isn’t available here")
-            }
-          >
-            <Copy size={13} aria-hidden="true" /> Copy
-          </button>
-        </div>
-      </div>
-
-      <div className="chain__tamper" id="tamper">
-        <p className="eyebrow">
-          <FlaskConical size={12} aria-hidden="true" /> Tamper test
-        </p>
-        <p className="chain__copy">Change one closed trade’s exit price in memory, then verify. The break lands on exactly that row.</p>
-        <label className="field">
-          <span>Ledger entry</span>
-          <select className="select mono" value={pick} onChange={(e) => setPickLocal(e.target.value)} disabled={running}>
-            {LEDGER.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.id} · {e.symbol} · {e.direction} · {OUTCOME_LABEL[e.outcome]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <dl className="chain__row mono">
-          <div>
-            <dt>Entry</dt>
-            <dd>{fmtL(base, base.entry)}</dd>
-          </div>
-          <div>
-            <dt>Stop</dt>
-            <dd>{fmtL(base, base.stop)}</dd>
-          </div>
-          <div>
-            <dt>Exit (stored)</dt>
-            <dd>{fmtL(base, base.exit)}</dd>
-          </div>
-          <div>
-            <dt>R</dt>
-            <dd className={base.r >= 0 ? "c-long" : "c-short"}>{signedR(base.r)}</dd>
-          </div>
-        </dl>
-        <label className="field">
-          <span>New exit price</span>
-          <input className="input mono" inputMode="decimal" value={exitStr} onChange={(e) => setExitStr(e.target.value)} disabled={running} aria-invalid={!exitOk} />
-        </label>
-        <div className="chain__tacts">
-          <button type="button" className="btn btn--danger" disabled={!exitOk || running} onClick={() => onTamper(base.id, exit)}>
-            <FlaskConical size={14} aria-hidden="true" /> Apply tamper
-          </button>
-          <button type="button" className="btn" disabled={!tampered && !result} onClick={onReset}>
-            <RotateCcw size={14} aria-hidden="true" /> Reset
-          </button>
-        </div>
-        {tampered && (
-          <p className="chain__note">
-            <b className="mono">{tampered.id}</b> exit {fmtL(base, tampered.from)} → <span className="c-short mono">{fmtL(base, tampered.to)}</span>. Nothing
-            is saved; Reset restores the original ledger.
-          </p>
-        )}
-        {!exitOk && exitStr !== "" && <p className="chain__warn">Enter a positive price that differs from the stored exit.</p>}
-      </div>
-    </section>
+      <LiveTable entries={work} cells={cells} tamperedSeq={tampered?.seq ?? null} />
+    </div>
   );
 }
 
-/* ---------------- monthly heatmap ---------------- */
-function MonthlyHeatmap({ grid }: { grid: ReturnType<typeof monthlyGrid> }) {
-  const max = Math.max(...[...grid.cells.values()].map((c) => Math.abs(c.r)), 1);
-  const last = LEDGER.reduce((m, e) => Math.max(m, Date.parse(e.closedAt)), 0);
-  const lastD = new Date(last);
+function LiveTopline({ head, headErr }: { head: LedgerHead | null; headErr: boolean }) {
   return (
-    <section className="panel heat" aria-label="Monthly R heatmap">
-      <header className="panel__head">
-        <span className="eyebrow">Monthly R</span>
-        <span className="mono t3 proof__meta">sum of R per month (closed date, UTC)</span>
+    <div className="lled__top">
+      <EngineTag />
+      <span className="chip">SHA-256 · hash chain v2</span>
+      <span className="chip">append-only</span>
+      <span className="mono t3 lled__asof">
+        {head?.asOf ? `head as of ${fmtAsOf(head.asOf, { date: true })}` : headErr ? "head unavailable" : ""}
+      </span>
+    </div>
+  );
+}
+
+function LiveTamper({
+  entries,
+  running,
+  tampered,
+  onTamper,
+  onReset,
+}: {
+  entries: LedgerEntryV2[];
+  running: boolean;
+  tampered: { seq: number; field: "exit" | "stop"; from: number | null; to: number } | null;
+  onTamper: (seq: number, field: "exit" | "stop", to: number) => void;
+  onReset: () => void;
+}) {
+  const [seq, setSeq] = useState<number>(() => entries[Math.max(0, entries.length - 1)].seq);
+  const base = entries.find((e) => e.seq === seq) ?? entries[entries.length - 1];
+  const field: "exit" | "stop" = base.type === "close" && typeof base.exit === "number" ? "exit" : "stop";
+  const stored = base[field] as number;
+  const [val, setVal] = useState("");
+  useEffect(() => {
+    const d = instFor(base.symbol)?.decimals ?? 2;
+    setVal((stored * 1.012).toFixed(d));
+  }, [base, stored]);
+  const n = Number(val);
+  const ok = Number.isFinite(n) && n > 0 && n !== stored;
+  return (
+    <div className="chain__tamper" id="live-tamper">
+      <p className="eyebrow">
+        <FlaskConical size={12} aria-hidden="true" /> Tamper test
+      </p>
+      <p className="chain__copy">Edit one entry in memory (a close’s exit, or an issue’s stop), then watch the chain break on exactly that entry.</p>
+      <label className="field">
+        <span>Ledger entry</span>
+        <select className="select mono" value={base.seq} onChange={(e) => setSeq(Number(e.target.value))} disabled={running}>
+          {entries.map((e) => (
+            <option key={e.seq} value={e.seq}>
+              #{e.seq} · {e.type} · {e.symbol} · {e.direction === "LONG" ? "▲" : "▼"} {e.direction}
+            </option>
+          ))}
+        </select>
+      </label>
+      <dl className="chain__row mono">
+        <div>
+          <dt>Type</dt>
+          <dd>{base.type}</dd>
+        </div>
+        <div>
+          <dt>Stop</dt>
+          <dd>{lv(base, base.stop)}</dd>
+        </div>
+        <div>
+          <dt>Exit</dt>
+          <dd>{lv(base, base.exit)}</dd>
+        </div>
+        <div>
+          <dt>R</dt>
+          <dd className={typeof base.r === "number" ? (base.r >= 0 ? "c-long" : "c-short") : "t3"}>{typeof base.r === "number" ? signedR(base.r) : "—"}</dd>
+        </div>
+      </dl>
+      <label className="field">
+        <span>New {field} price</span>
+        <input className="input mono" inputMode="decimal" value={val} onChange={(e) => setVal(e.target.value)} disabled={running} aria-invalid={!ok} />
+      </label>
+      <div className="chain__tacts">
+        <button type="button" className="btn btn--danger" disabled={!ok || running} onClick={() => onTamper(base.seq, field, n)}>
+          <FlaskConical size={14} aria-hidden="true" /> Apply tamper
+        </button>
+        <button type="button" className="btn" disabled={!tampered || running} onClick={onReset}>
+          <RotateCcw size={14} aria-hidden="true" /> Reset
+        </button>
+      </div>
+      {tampered && (
+        <p className="chain__note">
+          <b className="mono">#{tampered.seq}</b> {tampered.field} {tampered.from === null ? "—" : tampered.from} →{" "}
+          <span className="c-short mono">{tampered.to}</span>. Nothing is sent or saved; Reset restores the server’s copy.
+        </p>
+      )}
+      {!ok && val !== "" && <p className="chain__warn">Enter a positive price that differs from the stored {field}.</p>}
+    </div>
+  );
+}
+
+const LPAGE = 25;
+function LiveTable({ entries, cells, tamperedSeq }: { entries: LedgerEntryV2[]; cells: CellState[]; tamperedSeq: number | null }) {
+  const [page, setPage] = useState(0);
+  const idx = useMemo(() => new Map(entries.map((e, i) => [e.seq, i])), [entries]);
+  const rows = useMemo(() => [...entries].reverse(), [entries]);
+  const pages = Math.max(1, Math.ceil(rows.length / LPAGE));
+  const slice = rows.slice(page * LPAGE, page * LPAGE + LPAGE);
+  useEffect(() => {
+    if (page > pages - 1) setPage(0);
+  }, [page, pages]);
+  return (
+    <section className="panel ledger" aria-label="Live ledger entries">
+      <header className="panel__head ledger__head">
+        <div>
+          <span className="eyebrow">Live ledger</span>
+          <span className="mono t3 proof__meta"> newest first · times UTC</span>
+        </div>
       </header>
-      <div className="panel__body scroll-x">
-        <table className="heat__t mono">
+      <div className="scroll-x">
+        <table className="dtable mono ledger__t lled__t">
           <thead>
             <tr>
-              <th />
-              {MONTHS.map((m) => (
-                <th key={m}>{m}</th>
-              ))}
-              <th className="heat__yr">Year</th>
+              <th className="r">Seq</th>
+              <th>At (UTC)</th>
+              <th>Type</th>
+              <th>Symbol</th>
+              <th>Dir</th>
+              <th className="r">Entry zone</th>
+              <th className="r">Stop</th>
+              <th className="r">T1</th>
+              <th className="r">T2</th>
+              <th className="r">Exit</th>
+              <th>Outcome</th>
+              <th className="r">R</th>
+              <th>Hash</th>
+              <th>Check</th>
             </tr>
           </thead>
           <tbody>
-            {grid.years.map((y) => {
-              const total = MONTHS.reduce((a, _, m) => a + (grid.cells.get(`${y}-${m}`)?.r ?? 0), 0);
+            {slice.map((e) => {
+              const c = cells[idx.get(e.seq) ?? 0] ?? "idle";
+              const edited = e.seq === tamperedSeq;
               return (
-                <tr key={y}>
-                  <th>{y}</th>
-                  {MONTHS.map((_, m) => {
-                    const c = grid.cells.get(`${y}-${m}`);
-                    const future = y > lastD.getUTCFullYear() || (y === lastD.getUTCFullYear() && m > lastD.getUTCMonth());
-                    if (!c)
-                      return (
-                        <td key={m} className={`heat__c ${future ? "is-future hatch" : "is-empty"}`} title={future ? "Not yet" : "No closed calls"}>
-                          {future ? "" : "0"}
-                        </td>
-                      );
-                    const a = Math.min(1, Math.abs(c.r) / max);
-                    const bg = c.r >= 0 ? `rgba(61, 214, 140, ${0.08 + a * 0.5})` : `rgba(255, 92, 77, ${0.08 + a * 0.5})`;
-                    return (
-                      <td key={m} className="heat__c" style={{ background: bg }} title={`${MONTHS[m]} ${y}: ${signedR(c.r, 1)} over ${c.n} calls`}>
-                        {c.r > 0 ? "+" : c.r < 0 ? MINUS : ""}
-                        {Math.abs(c.r).toFixed(1)}
-                      </td>
-                    );
-                  })}
-                  <td className={`heat__yr ${total >= 0 ? "c-long" : "c-short"}`}>{signedR(total, 1)}</td>
+                <tr key={e.seq} className={edited ? "is-edited" : c === "bad" ? "is-bad" : ""}>
+                  <td className="r t2">{e.seq}</td>
+                  <td className="t2">{fmtAt(e.at)}</td>
+                  <td>
+                    <span className={`lled__type lled__type--${e.type}`}>{e.type === "issue" ? "ISSUE" : "CLOSE"}</span>
+                  </td>
+                  <td>
+                    <Link to={`/app/i/${e.symbol}`} className="ledger__sym">
+                      {e.symbol}
+                    </Link>
+                  </td>
+                  <td className={e.direction === "LONG" ? "c-long" : "c-short"}>
+                    {e.direction === "LONG" ? "▲" : "▼"} {e.direction}
+                  </td>
+                  <td className="r">
+                    {lv(e, e.entryLow)}–{lv(e, e.entryHigh)}
+                  </td>
+                  <td className="r t2">{lv(e, e.stop)}</td>
+                  <td className="r t2">{lv(e, e.target1)}</td>
+                  <td className="r t2">{lv(e, e.target2)}</td>
+                  <td className={`r ${edited ? "c-short" : ""}`}>
+                    {lv(e, e.exit)}
+                    {edited && <span className="ledger__edited">edited</span>}
+                  </td>
+                  <td>{e.outcome ? <span className={`oc oc--${e.outcome}`}>{OUTCOME_V2[e.outcome] ?? e.outcome}</span> : <span className="t3">open</span>}</td>
+                  <td className={`r ${typeof e.r === "number" ? (e.r > 0 ? "c-long" : e.r < 0 ? "c-short" : "") : "t3"}`}>{typeof e.r === "number" ? signedR(e.r) : "—"}</td>
+                  <td className="t3" title={e.hash}>
+                    {shortHash(e.hash, 8)}
+                  </td>
+                  <td>
+                    {c === "ok" ? <span className="c-long">✓</span> : c === "bad" ? <span className="c-short">✗ break</span> : c === "skip" ? <span className="t3">–</span> : <span className="t3">·</span>}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-        <p className="proof__fine">Hatched cells are months that haven’t happened yet. Partial month: {MONTHS[lastD.getUTCMonth()]} {lastD.getUTCFullYear()}.</p>
       </div>
-    </section>
-  );
-}
-
-/* ---------------- breakdowns ---------------- */
-type BKey = "market" | "style" | "strategy";
-function Breakdowns() {
-  const [k, setK] = useState<BKey>("market");
-  const rows = useMemo(
-    () =>
-      breakdown(LEDGER, (e) => (k === "market" ? e.market : k === "style" ? e.style : e.strategy)).map((r) => ({
-        ...r,
-        label: k === "market" ? MARKET_SHORT[r.key as MarketId] : k === "style" ? STYLE_LABEL[r.key as Style] : r.key,
-      })),
-    [k],
-  );
-  return (
-    <section className="panel brk" aria-label="Breakdowns">
-      <header className="panel__head">
-        <span className="eyebrow">Breakdown</span>
-        <div className="seg" role="group" aria-label="Group by">
-          {(["market", "style", "strategy"] as BKey[]).map((x) => (
-            <button key={x} type="button" aria-pressed={k === x} onClick={() => setK(x)}>
-              {x}
+      {pages > 1 && (
+        <footer className="ledger__pager mono">
+          <span className="t3">
+            {page * LPAGE + 1}–{Math.min(rows.length, page * LPAGE + LPAGE)} of {rows.length}
+          </span>
+          <div className="ledger__pbtns">
+            <button type="button" className="btn btn--sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
+              <ChevronLeft size={14} />
             </button>
-          ))}
-        </div>
-      </header>
-      <div className="scroll-x brk__scroll">
-        <table className="dtable mono">
-          <thead>
-            <tr>
-              <th>{k}</th>
-              <th className="r">Calls</th>
-              <th className="r">Win rate</th>
-              <th className="r">Avg win</th>
-              <th className="r">Avg loss</th>
-              <th className="r">Expectancy</th>
-              <th className="r">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.key}>
-                <td className="brk__key">{r.label}</td>
-                <td className="r">{r.count}</td>
-                <td className="r">{(r.winRate * 100).toFixed(1)}%</td>
-                <td className="r c-long">{signedR(r.avgWin)}</td>
-                <td className="r c-short">{signedR(r.avgLoss)}</td>
-                <td className={`r ${r.expectancy >= 0 ? "c-brand" : "c-short"}`}>{signedR(r.expectancy)}</td>
-                <td className="r">{signedR(r.totalR, 1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-/* ---------------- ledger table ---------------- */
-function LedgerTable({
-  entries,
-  cells,
-  tamperedId,
-  onPickTamper,
-}: {
-  entries: LedgerEntry[];
-  cells: CellState[];
-  tamperedId: string | null;
-  onPickTamper: (id: string) => void;
-}) {
-  const [market, setMarket] = useState<"all" | MarketId>("all");
-  const [outcome, setOutcome] = useState<"all" | Outcome>("all");
-  const [page, setPage] = useState(0);
-  const idx = useMemo(() => new Map(entries.map((e, i) => [e.id, i])), [entries]);
-  const rows = useMemo(
-    () => [...entries].reverse().filter((e) => (market === "all" || e.market === market) && (outcome === "all" || e.outcome === outcome)),
-    [entries, market, outcome],
-  );
-  useEffect(() => setPage(0), [market, outcome]);
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
-  const slice = rows.slice(page * PAGE, page * PAGE + PAGE);
-  return (
-    <section className="panel ledger" aria-label="Ledger">
-      <header className="panel__head ledger__head">
-        <div>
-          <span className="eyebrow">Ledger</span>
-          <span className="mono t3 proof__meta"> newest first</span>
-        </div>
-        <div className="ledger__filters">
-          <label className="filters__sel">
-            <span className="eyebrow">Market</span>
-            <select className="select" value={market} onChange={(e) => setMarket(e.target.value as "all" | MarketId)}>
-              <option value="all">All</option>
-              {MARKET_ORDER.map((m) => (
-                <option key={m} value={m}>
-                  {MARKET_SHORT[m]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="filters__sel">
-            <span className="eyebrow">Outcome</span>
-            <select className="select" value={outcome} onChange={(e) => setOutcome(e.target.value as "all" | Outcome)}>
-              <option value="all">All</option>
-              {(Object.keys(OUTCOME_LABEL) as Outcome[]).map((o) => (
-                <option key={o} value={o}>
-                  {OUTCOME_LABEL[o]}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </header>
-      {rows.length === 0 ? (
-        <div className="panel__body">
-          <EmptyState
-            title="No calls match."
-            action={
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setMarket("all");
-                  setOutcome("all");
-                }}
-              >
-                Clear filters
-              </button>
-            }
-          >
-            Try another market or outcome.
-          </EmptyState>
-        </div>
-      ) : (
-        <>
-          <div className="scroll-x">
-            <table className="dtable mono ledger__t">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Issued</th>
-                  <th>Symbol</th>
-                  <th>Dir</th>
-                  <th className="r">Entry</th>
-                  <th className="r">Stop</th>
-                  <th className="r">Target</th>
-                  <th className="r">Exit</th>
-                  <th>Outcome</th>
-                  <th className="r">R</th>
-                  <th>Hash</th>
-                  <th>Check</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {slice.map((e) => {
-                  const c = cells[idx.get(e.id) ?? 0];
-                  const edited = e.id === tamperedId;
-                  return (
-                    <tr key={e.id} className={edited ? "is-edited" : c === "bad" ? "is-bad" : ""}>
-                      <td>{e.id}</td>
-                      <td className="t2">{new Date(e.issuedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" })}</td>
-                      <td>
-                        <Link to={`/app/i/${e.symbol}`} className="ledger__sym">
-                          {e.symbol}
-                        </Link>
-                      </td>
-                      <td className={e.direction === "LONG" ? "c-long" : "c-short"}>
-                        {e.direction === "LONG" ? "▲" : "▼"} {e.direction}
-                      </td>
-                      <td className="r">{fmtL(e, e.entry)}</td>
-                      <td className="r t2">{fmtL(e, e.stop)}</td>
-                      <td className="r t2">{fmtL(e, e.target)}</td>
-                      <td className={`r ${edited ? "c-short" : ""}`}>
-                        {fmtL(e, e.exit)}
-                        {edited && <span className="ledger__edited">edited</span>}
-                      </td>
-                      <td>
-                        <span className={`oc oc--${e.outcome}`}>{OUTCOME_LABEL[e.outcome]}</span>
-                      </td>
-                      <td className={`r ${e.r > 0 ? "c-long" : e.r < 0 ? "c-short" : ""}`}>{signedR(e.r)}</td>
-                      <td className="t3" title={e.hash}>
-                        {shortHash(e.hash, 8)}
-                      </td>
-                      <td>
-                        {c === "ok" ? <span className="c-long">✓</span> : c === "bad" ? <span className="c-short">✗ break</span> : c === "skip" ? <span className="t3">–</span> : <span className="t3">·</span>}
-                      </td>
-                      <td>
-                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => onPickTamper(e.id)} title={`Use ${e.id} in the tamper test`}>
-                          Tamper
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <footer className="ledger__pager mono">
-            <span className="t3">
-              {page * PAGE + 1}–{Math.min(rows.length, page * PAGE + PAGE)} of {rows.length}
+            <span>
+              {page + 1} / {pages}
             </span>
-            <div className="ledger__pbtns">
-              <button type="button" className="btn btn--sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
-                <ChevronLeft size={14} />
-              </button>
-              <span>
-                {page + 1} / {pages}
-              </span>
-              <button type="button" className="btn btn--sm" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
-                <ChevronRight size={14} />
-              </button>
-            </div>
-          </footer>
-        </>
+            <button type="button" className="btn btn--sm" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </footer>
       )}
     </section>
   );

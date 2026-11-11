@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { Bookmark, BookmarkCheck, Lock } from "lucide-react";
+import { Bookmark, BookmarkCheck } from "lucide-react";
 import type { Instrument, LiveStatus, TradeSignal } from "../engine/types";
 import { isTrade } from "../engine/types";
-import { rAt } from "../engine/seed";
-import { fmtAgo, fmtCountdown, fmtR, fmtSignedPct } from "../engine/format";
-import { issuedAtMs, secondsToReveal, useLiveStatus, useNow, useTick } from "../engine/live";
+import { rAt } from "../engine/universe";
+import { fmtAgo, fmtR, fmtSignedPct } from "../engine/format";
+import { issuedAtMs, useLiveStatus, useNow, useTick } from "../engine/live";
+import { EngineTag, FreshnessBadge, sitOutLabel } from "./badges";
 import { trackingStore, toggleIn, useStore } from "../engine/profile";
 import { ConfluenceMeter, DirectionPill, LevelsRow, LivePrice, StatusPill, TradeMap, distanceToZone } from "./signal";
 import { useCountUp, useReducedMotion } from "./hooks";
@@ -16,6 +17,7 @@ const REGIME_LABEL: Record<string, string> = {
   range: "Range",
   "high-vol": "High volatility",
   mixed: "Mixed",
+  unknown: "Not evaluated",
 };
 export function regimeLabel(r: string) {
   return REGIME_LABEL[r] ?? r;
@@ -29,7 +31,7 @@ export interface SignalCardProps {
   /** Card links to the instrument page; null disables the link. */
   linkTo?: string | null;
   variant?: "default" | "hero" | "anatomy";
-  /** Override the shown status (used by the landing hero's "Revealing…" beat). */
+  /** Override the shown status. */
   statusOverride?: LiveStatus;
   className?: string;
 }
@@ -48,13 +50,13 @@ export function SignalCard({
   const status = statusOverride ?? liveStatus;
   const reduced = useReducedMotion();
   const [revealKey, setRevealKey] = useState<string | null>(revealDelay !== null ? "mount" : null);
-  const prevStatus = useRef(liveStatus);
 
-  // queued -> revealed: run the Reveal
+  // a new engine call replaced the previous one between polls -> run the Reveal
+  const prevId = useRef(s.id);
   useEffect(() => {
-    if (prevStatus.current === "queued" && liveStatus !== "queued") setRevealKey(`reveal-${Date.now()}`);
-    prevStatus.current = liveStatus;
-  }, [liveStatus]);
+    if (prevId.current !== s.id && s.live && isTrade(s)) setRevealKey(`live-${s.id}`);
+    prevId.current = s.id;
+  }, [s]);
 
   const delay = revealKey === "mount" ? (revealDelay ?? 0) : 0;
   const href = linkTo === undefined ? `/app/i/${inst.symbol}` : linkTo;
@@ -70,7 +72,7 @@ export function SignalCard({
   const revealing = animating && revealKey !== null && !reduced;
   const style = { "--reveal-delay": `${delay}ms` } as CSSProperties;
 
-  const tone = status === "sit_out" ? "sitout" : status === "queued" ? "queued" : isTrade(s) ? s.direction.toLowerCase() : "sitout";
+  const tone = status === "sit_out" ? "sitout" : isTrade(s) ? s.direction.toLowerCase() : "sitout";
 
   return (
     <article
@@ -80,10 +82,8 @@ export function SignalCard({
       aria-label={`${inst.symbol} signal`}
     >
       <span className="sc__sweep" aria-hidden="true" />
-      <CardHeader inst={inst} href={href} status={status} />
-      {status === "queued" && isTrade(s) ? (
-        <SealedBody inst={inst} />
-      ) : status === "sit_out" || !isTrade(s) ? (
+      <CardHeader inst={inst} href={href} />
+      {status === "sit_out" || !isTrade(s) ? (
         <SitOutBody inst={inst} />
       ) : (
         <TradeBody inst={inst} s={s} status={status} revealKey={revealKey} delay={delay} trackable={trackable} />
@@ -92,7 +92,7 @@ export function SignalCard({
   );
 }
 
-function CardHeader({ inst, href, status }: { inst: Instrument; href: string | null; status: LiveStatus }) {
+function CardHeader({ inst, href }: { inst: Instrument; href: string | null }) {
   const s = inst.signal;
   const now = useNow(15_000);
   const mins = (now - issuedAtMs(inst)) / 60_000;
@@ -116,7 +116,8 @@ function CardHeader({ inst, href, status }: { inst: Instrument; href: string | n
         <span className="chip">{inst.exchange}</span>
         {isTrade(s) && <span className="chip">{s.timeframe}</span>}
         {isTrade(s) && <span className="chip">{s.style}</span>}
-        <span className="sc__ago mono">{status === "queued" ? "queued" : `issued ${fmtAgo(Math.max(0, mins))}`}</span>
+        <FreshnessBadge inst={inst} compact />
+        <span className="sc__ago mono">{`${s.live && !isTrade(s) ? "checked" : "issued"} ${fmtAgo(Math.max(0, mins))}`}</span>
       </div>
     </header>
   );
@@ -180,6 +181,11 @@ function TradeBody({
           </p>
         )}
       </div>
+      {s.live && (
+        <div className="sc__engine">
+          <EngineTag />
+        </div>
+      )}
       {trackable && (
         <footer className="sc__foot">
           <span className="sc__strategy">{s.strategy}</span>
@@ -209,45 +215,15 @@ function SitOutBody({ inst }: { inst: Instrument }) {
       </div>
       <div className="sc__live">
         <LivePrice inst={inst} showChange />
-        <span className="chip">{regimeLabel(s.regime)}</span>
+        <span className="chip">{s.live ? (sitOutLabel(s.sitOutReason) ?? regimeLabel(s.regime)) : regimeLabel(s.regime)}</span>
       </div>
       <p className="sc__thesis sc__thesis--sit">{s.thesis}</p>
       <ConfluenceMeter layers={s.layers} tone="sitout" />
       <p className="sc__inv">
-        <span>No levels.</span> Tudumm re-checks every bar and will issue a call only when the layers line up.
-      </p>
-    </>
-  );
-}
-
-function SealedBody({ inst }: { inst: Instrument }) {
-  const now = useNow();
-  const left = secondsToReveal(inst, now);
-  const beat = Math.ceil(left) <= 3;
-  return (
-    <>
-      <div className="sc__verdict">
-        <div className="sc__pills">
-          <span className="dpill dpill--sealed dpill--lg">
-            <Lock size={12} aria-hidden="true" /> SEALED
-          </span>
-          <StatusPill status="queued" />
-        </div>
-      </div>
-      <div className={`sc__drum ${beat ? "is-final" : ""}`} aria-live="polite">
-        <span className="eyebrow">Next reveal in</span>
-        <span key={Math.ceil(left)} className="sc__drum-num mono">
-          {fmtCountdown(left)}
-        </span>
-      </div>
-      <div className="sc__sealed hatch" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </div>
-      <ConfluenceMeter layers={inst.signal.layers} tone="sealed" />
-      <p className="sc__inv">
-        <span>Levels sealed</span> until the countdown ends. Then the full call appears at once.
+        <span>No levels.</span>{" "}
+        {s.live
+          ? "Engine v0 re-checks on every completed bar and issues a call only when at least three layers agree."
+          : "Tudumm re-checks every bar and will issue a call only when the layers line up."}
       </p>
     </>
   );

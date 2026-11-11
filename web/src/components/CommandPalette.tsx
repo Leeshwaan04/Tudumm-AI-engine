@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, CornerDownLeft, Search } from "lucide-react";
-import { instruments, MARKET_SHORT } from "../engine/seed";
+import { instruments, MARKET_SHORT } from "../engine/universe";
 import type { Instrument } from "../engine/types";
 import { isTrade } from "../engine/types";
 import { useStatuses } from "../engine/live";
-import { STATUS_LABEL } from "./signal";
 
 interface Item {
   key: string;
@@ -141,7 +140,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         <ul className="cmdk__list" id="cmdk-list" role="listbox" ref={listRef}>
           {items.length === 0 && (
             <li className="cmdk__empty">
-              No instrument matches “{q}”. The demo covers {instruments.length} instruments across India, US, Europe, crypto, FX
+              No instrument matches “{q}”. Tudumm covers {instruments.length} instruments across India, US, Europe, crypto, FX
               and commodities.
             </li>
           )}
@@ -180,8 +179,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                     <span className="cmdk__sig mono">
                       {st === "sit_out" ? (
                         <span className="c-neutral">SITTING OUT</span>
-                      ) : st === "queued" ? (
-                        <span className="c-brand">{STATUS_LABEL.queued.toUpperCase()}</span>
                       ) : isTrade(s) ? (
                         <span className={s.direction === "LONG" ? "c-long" : "c-short"}>
                           {s.direction === "LONG" ? "▲" : "▼"} {s.direction} {Math.round(s.confidence * 100)}%

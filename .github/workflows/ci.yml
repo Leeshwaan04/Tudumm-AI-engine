@@ -1,0 +1,42 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: web
+      - name: Worker typecheck
+        run: npm run typecheck:worker
+      - name: Engine + market tests
+        run: npm run test:market
+      - name: Kite broker guardrails, vault, routes and relay
+        run: npm run test:broker
+      - name: Live feed (5paisa/TOTP/ticks)
+        run: npm run test:live
+      - name: Extension
+        run: npm run test:ext
+      - name: Worker integration (wrangler dev, local D1)
+        run: node --test worker/test/core.test.mjs worker/test/core.hooks.test.mjs
+      - name: Web typecheck + build
+        run: npm run build
+        working-directory: web
+      # runner/backtest.ts needs the git-ignored NSE cache (runner/.cache), so it runs locally, not here.

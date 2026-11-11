@@ -1,18 +1,15 @@
 import { useSyncExternalStore } from "react";
-import { instruments, entryMid, riskPerUnit, getInstrument } from "./seed";
-import { rng } from "./prng";
+import { getInstrument } from "./universe";
 import type { Instrument, LiveStatus } from "./types";
 import { isTrade } from "./types";
 
 /**
- * Live tick simulation (shared rules with the extension):
- * - every instrument ticks every 1.2–2.0 s
- * - mean-reverting random walk around the seed price, sigma/tick: 0.03% (FX 0.01%, crypto 0.08%)
- * - clamped so active / t1_hit never cross stop or target 2, pending stays out of the entry zone
- * - only status change simulated: queued -> active|pending after revealAfterSec from load
+ * Price + status store. Nothing here is simulated:
+ * - prices come from the universe poll (every 5 s while visible) and, for crypto + the PAXG gold proxy,
+ *   from the Binance public WebSocket; statuses come from engine v0 via the universe.
+ * - sparkline history only contains prices actually received in this session.
  */
 
-export const LOAD_AT = Date.now();
 const HISTORY = 64;
 
 export interface Tick {
@@ -21,12 +18,8 @@ export interface Tick {
   dir: 1 | -1 | 0;
   seq: number;
   history: number[];
-}
-
-function sigmaFor(inst: Instrument): number {
-  if (inst.assetClass === "fx") return 0.0001;
-  if (inst.assetClass === "crypto") return 0.0008;
-  return 0.0003;
+  /** ms timestamp of the last real update. */
+  at?: number;
 }
 
 function roundTo(v: number, d: number): number {
@@ -34,148 +27,127 @@ function roundTo(v: number, d: number): number {
   return Math.round(v * f) / f;
 }
 
-function seedHistory(inst: Instrument): number[] {
-  // deterministic recent path ending at the seed price (so sparklines render immediately)
-  const r = rng(`${inst.symbol}:history`);
-  const s = sigmaFor(inst) * inst.price;
-  const out: number[] = [inst.price];
-  let p = inst.price;
-  for (let i = 1; i < 40; i++) {
-    p = p - s * r.normal() * 1.4 + 0.05 * (inst.price - p);
-    out.unshift(roundTo(p, inst.decimals));
-  }
-  return out;
-}
-
 type Listener = () => void;
 
-class LiveStore {
+export class LiveStore {
+  private bySym = new Map<string, Instrument>();
   private ticks = new Map<string, Tick>();
-  private nextAt = new Map<string, number>();
-  private side = new Map<string, "above" | "below">();
   private statuses: Record<string, LiveStatus> = {};
   private revealedAt = new Map<string, number>();
   private all: Record<string, Tick> = {};
   private symListeners = new Map<string, Set<Listener>>();
   private anyListeners = new Set<Listener>();
   private statusListeners = new Set<Listener>();
-  private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor() {
+  constructor(instruments: Instrument[]) {
     const now = Date.now();
     for (const inst of instruments) {
-      const t: Tick = { price: inst.price, prev: inst.price, dir: 0, seq: 0, history: seedHistory(inst) };
+      this.bySym.set(inst.symbol, inst);
+      const t: Tick = { price: inst.price, prev: inst.price, dir: 0, seq: 0, history: [inst.price], at: now };
       this.ticks.set(inst.symbol, t);
       this.all[inst.symbol] = t;
-      this.nextAt.set(inst.symbol, now + 400 + Math.random() * 1600);
       this.statuses[inst.symbol] = inst.signal.status;
-      this.recordSide(inst, inst.price);
     }
   }
 
-  private recordSide(inst: Instrument, price: number) {
-    const s = inst.signal;
-    if (!isTrade(s)) return;
-    this.side.set(inst.symbol, price > s.entryHigh ? "above" : "below");
+  instrument(symbol: string): Instrument | undefined {
+    return this.bySym.get(symbol);
   }
 
-  private ensureRunning() {
-    if (this.timer || typeof window === "undefined") return;
-    this.timer = setInterval(() => this.loop(), 200);
+  private write(symbol: string, price: number, t: Tick, at?: number) {
+    const history = t.history.length >= HISTORY ? t.history.slice(1) : t.history.slice();
+    history.push(price);
+    const nt: Tick = { price, prev: t.price, dir: price > t.price ? 1 : price < t.price ? -1 : 0, seq: t.seq + 1, history, at: at ?? Date.now() };
+    this.ticks.set(symbol, nt);
   }
 
-  bounds(inst: Instrument): [number, number] {
-    const s = inst.signal;
-    const p0 = inst.price;
-    if (!isTrade(s)) return [p0 * 0.97, p0 * 1.03];
-    const status = this.statuses[inst.symbol];
-    const risk = riskPerUnit(s);
-    const m = risk * 0.06;
-    const long = s.direction === "LONG";
-    const lo = long ? s.stop : s.target2;
-    const hi = long ? s.target2 : s.stop;
-    if (status === "t1_hit") {
-      const be = entryMid(s);
-      return long ? [be + m, s.target2 - m] : [s.target2 + m, be - m];
+  private flush(changed: string[]) {
+    if (!changed.length) return;
+    this.all = { ...this.all };
+    for (const sym of changed) {
+      this.all[sym] = this.ticks.get(sym)!;
+      this.symListeners.get(sym)?.forEach((l) => l());
     }
-    if (status === "pending") {
-      return this.side.get(inst.symbol) === "above" ? [s.entryHigh + m, hi - m] : [lo + m, s.entryLow - m];
+    this.anyListeners.forEach((l) => l());
+  }
+
+  /* ---------- inputs ---------- */
+
+  /** A real price (Binance stream or universe poll). */
+  pushPrice(symbol: string, price: number, at = Date.now()) {
+    if (!(price > 0)) return;
+    const t = this.ticks.get(symbol);
+    const inst = this.bySym.get(symbol);
+    if (!t || !inst) return;
+    const p = roundTo(price, Math.max(inst.decimals, 2));
+    if (p === t.price && t.seq > 0) {
+      this.ticks.set(symbol, { ...t, at });
+      return;
     }
-    return [lo + m, hi - m];
+    this.write(symbol, p, t, at);
+    this.flush([symbol]);
   }
 
-  private step(inst: Instrument, t: Tick): number {
-    const sigma = sigmaFor(inst) * inst.price;
-    // Box-Muller with Math.random (live ticks need not be deterministic)
-    const u = 1 - Math.random();
-    const v = Math.random();
-    const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-    let p = t.price + 0.05 * (inst.price - t.price) + sigma * z;
-    const [lo, hi] = this.bounds(inst);
-    if (p < lo) p = lo + Math.min(lo - p, (hi - lo) * 0.05);
-    if (p > hi) p = hi - Math.min(p - hi, (hi - lo) * 0.05);
-    p = Math.min(hi, Math.max(lo, p));
-    return roundTo(p, inst.decimals);
-  }
-
-  private loop() {
+  /**
+   * Swap in a new poll of the universe. Keeps tick history; updates prices for
+   * instruments that aren't streamed, statuses for all. Returns symbols whose signal id changed.
+   */
+  applyUniverse(next: Instrument[], streamed: Set<string>): { symbol: string; inst: Instrument }[] {
+    const changedSignals: { symbol: string; inst: Instrument }[] = [];
+    const prevBy = this.bySym;
+    this.bySym = new Map(next.map((i) => [i.symbol, i]));
+    const nextStatuses: Record<string, LiveStatus> = {};
+    const priceChanged: string[] = [];
     const now = Date.now();
-    const changed: string[] = [];
-    let statusChanged = false;
-    for (const inst of instruments) {
-      const s = inst.signal;
-      if (s.status === "queued" && this.statuses[inst.symbol] === "queued" && isTrade(s)) {
-        const at = LOAD_AT + (s.revealAfterSec ?? 30) * 1000;
-        if (now >= at) {
-          const p = this.ticks.get(inst.symbol)!.price;
-          const inZone = p >= s.entryLow && p <= s.entryHigh;
-          this.statuses = { ...this.statuses, [inst.symbol]: inZone ? "active" : "pending" };
-          this.revealedAt.set(inst.symbol, now);
-          this.recordSide(inst, p);
-          statusChanged = true;
-        }
+    for (const inst of next) {
+      nextStatuses[inst.symbol] = inst.signal.status;
+      const old = prevBy.get(inst.symbol);
+      if (old && old.signal.id !== inst.signal.id && isTrade(inst.signal)) {
+        changedSignals.push({ symbol: inst.symbol, inst });
+        this.revealedAt.set(inst.symbol, now);
       }
-      const due = this.nextAt.get(inst.symbol)!;
-      if (now < due) continue;
-      this.nextAt.set(inst.symbol, now + 1200 + Math.random() * 800);
-      const t = this.ticks.get(inst.symbol)!;
-      const price = this.step(inst, t);
-      if (price === t.price) continue;
-      const history = t.history.length >= HISTORY ? t.history.slice(1) : t.history.slice();
-      history.push(price);
-      const nt: Tick = { price, prev: t.price, dir: price > t.price ? 1 : -1, seq: t.seq + 1, history };
-      this.ticks.set(inst.symbol, nt);
-      changed.push(inst.symbol);
-    }
-    if (changed.length) {
-      this.all = { ...this.all };
-      for (const sym of changed) {
-        this.all[sym] = this.ticks.get(sym)!;
-        this.symListeners.get(sym)?.forEach((l) => l());
+      const t = this.ticks.get(inst.symbol);
+      if (!t) {
+        const nt: Tick = { price: inst.price, prev: inst.price, dir: 0, seq: 0, history: [inst.price], at: now };
+        this.ticks.set(inst.symbol, nt);
+        this.all = { ...this.all, [inst.symbol]: nt };
+        continue;
       }
-      this.anyListeners.forEach((l) => l());
+      if (!streamed.has(inst.symbol) && inst.price !== t.price) {
+        this.write(inst.symbol, inst.price, t, now);
+        priceChanged.push(inst.symbol);
+      }
     }
-    if (statusChanged) this.statusListeners.forEach((l) => l());
+    this.statuses = nextStatuses;
+    this.flush(priceChanged);
+    this.statusListeners.forEach((l) => l());
+    return changedSignals;
   }
 
-  subscribeSymbol = (symbol: string) => (l: Listener) => {
-    this.ensureRunning();
-    let set = this.symListeners.get(symbol);
-    if (!set) this.symListeners.set(symbol, (set = new Set()));
-    set.add(l);
-    return () => {
-      set!.delete(l);
-    };
+  /* ---------- subscriptions ---------- */
+  private symSubs = new Map<string, (l: Listener) => () => void>();
+  subscribeSymbol = (symbol: string) => {
+    let s = this.symSubs.get(symbol);
+    if (!s) {
+      s = (l: Listener) => {
+        let set = this.symListeners.get(symbol);
+        if (!set) this.symListeners.set(symbol, (set = new Set()));
+        set.add(l);
+        return () => {
+          set!.delete(l);
+        };
+      };
+      this.symSubs.set(symbol, s);
+    }
+    return s;
   };
   subscribeAll = (l: Listener) => {
-    this.ensureRunning();
     this.anyListeners.add(l);
     return () => {
       this.anyListeners.delete(l);
     };
   };
   subscribeStatus = (l: Listener) => {
-    this.ensureRunning();
     this.statusListeners.add(l);
     return () => {
       this.statusListeners.delete(l);
@@ -197,23 +169,39 @@ class LiveStore {
 
 const EMPTY_TICK: Tick = { price: 0, prev: 0, dir: 0, seq: 0, history: [] };
 
-export const live = new LiveStore();
-
-const symSubs = new Map<string, (l: Listener) => () => void>();
-function subFor(symbol: string) {
-  let s = symSubs.get(symbol);
-  if (!s) symSubs.set(symbol, (s = live.subscribeSymbol(symbol)));
-  return s;
+let active: LiveStore = new LiveStore([]);
+const activeListeners = new Set<Listener>();
+/** Install the store for a freshly loaded universe (DataProvider does this on the first poll). */
+export function setActiveLive(store: LiveStore) {
+  if (store === active) return;
+  active = store;
+  activeListeners.forEach((l) => l());
+}
+/** Non-hook access to the active store (chart updates, timers). */
+export function activeLive(): LiveStore {
+  return active;
+}
+export function useLiveStore(): LiveStore {
+  return useSyncExternalStore(
+    (l) => {
+      activeListeners.add(l);
+      return () => activeListeners.delete(l);
+    },
+    () => active,
+  );
 }
 
 export function useTick(symbol: string): Tick {
-  return useSyncExternalStore(subFor(symbol), () => live.getTick(symbol));
+  const store = useLiveStore();
+  return useSyncExternalStore(store.subscribeSymbol(symbol), () => store.getTick(symbol));
 }
 export function useAllTicks(): Record<string, Tick> {
-  return useSyncExternalStore(live.subscribeAll, live.getAll);
+  const store = useLiveStore();
+  return useSyncExternalStore(store.subscribeAll, store.getAll);
 }
 export function useStatuses(): Record<string, LiveStatus> {
-  return useSyncExternalStore(live.subscribeStatus, live.getStatuses);
+  const store = useLiveStore();
+  return useSyncExternalStore(store.subscribeStatus, store.getStatuses);
 }
 export function useLiveStatus(symbol: string): LiveStatus {
   const all = useStatuses();
@@ -248,19 +236,15 @@ export function useNow(stepMs = 250): number {
 /* ---------- time helpers ---------- */
 export function issuedAtMs(inst: Instrument): number {
   const s = inst.signal;
-  if (s.status === "queued" && isTrade(s)) {
-    return live.getRevealedAt(inst.symbol) ?? LOAD_AT + (s.revealAfterSec ?? 30) * 1000;
+  if (s.issuedAt) {
+    const t = Date.parse(s.issuedAt);
+    if (Number.isFinite(t)) return t;
   }
-  return LOAD_AT - s.issuedMinutesAgo * 60_000;
-}
-export function secondsToReveal(inst: Instrument, at: number): number {
-  const s = inst.signal;
-  if (!isTrade(s) || s.status !== "queued") return 0;
-  return Math.max(0, (LOAD_AT + (s.revealAfterSec ?? 30) * 1000 - at) / 1000);
+  return Date.now() - s.issuedMinutesAgo * 60_000;
 }
 
 export function changePct(symbol: string, price: number): number {
   const inst = getInstrument(symbol);
-  if (!inst) return 0;
+  if (!inst || !inst.prevClose) return 0;
   return ((price - inst.prevClose) / inst.prevClose) * 100;
 }

@@ -4,9 +4,12 @@ import { Activity, ArrowUpRight, Globe2, Search, ShieldCheck, Star, UserRound } 
 import { LogoMark, Wordmark } from "../../components/Logo";
 import { CommandPalette } from "../../components/CommandPalette";
 import { Onboarding } from "../../components/Onboarding";
-import { DemoBadge, Disclaimer, SessionChip, Toaster } from "../../components/ui";
+import { SessionChip, Toaster } from "../../components/ui";
+import { DataBanner, Disclaimer, EngineTag, LegalLinks, OfflineBanner } from "../../components/badges";
+import { AnnouncementBar, AuthControl } from "../../components/AccountChrome";
+import { useSession } from "../../api/session";
 import { PERSONA_BY_ID, useProfile, useStore, watchlistStore } from "../../engine/profile";
-import { getInstrument } from "../../engine/seed";
+import { getInstrument, useDataset } from "../../engine/universe";
 import { useTick } from "../../engine/live";
 import { fmtPrice, fmtSignedPct } from "../../engine/format";
 
@@ -23,7 +26,10 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const fromPersona = (location.state as { fromPersona?: boolean } | null)?.fromPersona === true;
-  const showOnboarding = !profile.onboarded;
+  const session = useSession();
+  const consentDue = session.status === "signed_in" && (session.me?.pendingConsents?.some((c) => c.kind !== "marketing") ?? false);
+  const onLink = location.pathname.startsWith("/app/link");
+  const showOnboarding = (!profile.onboarded || consentDue) && !onLink;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -67,7 +73,7 @@ export function AppShell() {
             <ArrowUpRight size={16} aria-hidden="true" />
             <span>Back to site</span>
           </Link>
-          <p className="side__ver mono">v0.1 · prototype</p>
+          <p className="side__ver mono">v0.2 · beta</p>
         </div>
       </aside>
 
@@ -87,20 +93,30 @@ export function AppShell() {
             <SessionChip k="CRYPTO" />
           </div>
           <div className="top__right">
-            <DemoBadge />
+            <EngineTag className="top__engine" />
             <button type="button" className="persona-chip" onClick={() => navigate("/app/profile")} title="Edit your profile">
               <span className="persona-chip__dot" aria-hidden="true" />
               {PERSONA_BY_ID[profile.persona].short}
             </button>
+            <AuthControl />
           </div>
         </header>
+        <div className="banners">
+          <AnnouncementBar />
+          <OfflineBanner />
+          <DataBanner />
+        </div>
 
         <main className="page" id="main">
           <Outlet context={{ openSearch: () => setCmdOpen(true) }} />
         </main>
 
         <footer className="app-foot">
+          <p className="disclaimer disclaimer--key">Tudumm is in beta. Signals are probabilistic and not investment advice. Trading involves risk of loss.</p>
           <Disclaimer />
+          <nav className="app-foot__links" aria-label="Legal and help">
+            <LegalLinks />
+          </nav>
           <p className="disclaimer">
             Charts by{" "}
             <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" className="u-link">
@@ -121,7 +137,7 @@ export function AppShell() {
       </nav>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
-      {showOnboarding && <Onboarding initialStep={fromPersona ? 1 : 0} onDone={() => undefined} />}
+      {showOnboarding && <Onboarding initialStep={profile.onboarded && consentDue ? 3 : fromPersona ? 1 : 0} onDone={() => undefined} />}
       <Toaster />
     </div>
   );
@@ -129,6 +145,7 @@ export function AppShell() {
 
 function Watchlist() {
   const list = useStore(watchlistStore);
+  useDataset();
   return (
     <section className="side__watch" aria-label="Watchlist">
       <p className="side__label eyebrow">

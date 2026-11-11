@@ -1,6 +1,11 @@
 // Side panel: "This page" (follows the active tab), "Feed" (all signals with
-// market filters + queued reveals), "Watchlist", and a detail view with sizer.
-import { loadSeed, createEngine, formatR, formatPct } from "./lib/engine.js";
+// market filters), "Watchlist" (with the Tudumm account link that syncs it),
+// and a detail view with sizer.
+// Data: live universe + Binance ticks (lib/live.js); an explicit offline state
+// with a retry when it can't load.
+import { formatR, formatPct } from "./lib/engine.js";
+import { createDataSession } from "./lib/live.js";
+import { createAccountPanel } from "./lib/accountui.js";
 import * as P from "./lib/platform.js";
 import * as UI from "./lib/ui.js";
 
@@ -10,7 +15,10 @@ const $tabs = document.getElementById("tabs");
 const $view = document.getElementById("view");
 
 const live = UI.createLive();
+let data = null;
 let engine = null;
+let acctPanel = null;
+let tickStatus = "off";
 let settings = null;
 let watch = [];
 let tab = "page"; // page | feed | watch
@@ -19,21 +27,21 @@ let market = "ALL";
 let pageDet = null;
 let components = [];
 let unsubscribe = null;
-let lastKey = "";
-let revealedNotice = null;
+let booted = false;
 
 // ------------------------------------------------------------------ chrome --
 
 function renderBar() {
   $bar.replaceChildren(
     UI.wordmark(),
-    UI.demoBadge(),
+    UI.dataBadge(),
     h("span", { class: "bar-spacer" }),
     h("button", { type: "button", class: "icon-btn", title: "Options", "aria-label": "Open options", onclick: () => P.openOptions() }, UI.iconGear()),
   );
 }
 
 function renderTabs() {
+  if (!engine) return $tabs.replaceChildren();
   const defs = [
     ["page", "This page", pageDet && pageDet.symbol ? h("i", { class: "live-dot", "aria-hidden": "true" }) : null],
     ["feed", "Feed", h("span", { class: "count" }, String(engine ? engine.instruments.length : 0))],
@@ -84,35 +92,12 @@ function mount(list) {
   if (unsubscribe) unsubscribe();
   unsubscribe = live.subscribe((now) => {
     for (const c of components) c.update(now);
-    checkReveals(now);
   });
 }
 
 // ----------------------------------------------------------------- helpers --
 
 const statusOf = (s, now) => engine.signalState(s, now).status;
-
-function queued(now = Date.now()) {
-  return engine.instruments
-    .filter((i) => statusOf(i.symbol, now) === "queued")
-    .sort((a, b) => a.signal.revealAfterSec - b.signal.revealAfterSec)
-    .map((i) => i.symbol);
-}
-
-function checkReveals(now) {
-  const key = queued(now).join(",");
-  if (key === lastKey) return;
-  const before = lastKey ? lastKey.split(",") : [];
-  lastKey = key;
-  const gone = before.filter((s) => s && !key.split(",").includes(s));
-  if (!gone.length) return;
-  for (const s of gone) {
-    const snap = engine.snapshot(s, now);
-    revealedNotice = { symbol: s, until: now + 6000 };
-    P.toast(`${s} revealed: ${snap.direction === "LONG" ? "▲" : "▼"} ${snap.direction} ${snap.confidencePct}% · ${snap.statusText}`, { tone: "ok" });
-  }
-  if (tab === "feed" && !detail) render({ keepScroll: true, revealed: gone });
-}
 
 function hostOf(url) {
   try {
@@ -125,11 +110,12 @@ function hostOf(url) {
 function starFor(symbol) {
   return () =>
     UI.starButton(watch.includes(symbol), async () => {
-      const on = await P.toggleWatch(symbol);
+      const res = await P.toggleWatch(symbol);
       watch = await P.getWatchlist();
       renderTabs();
-      P.toast(on ? `${symbol} added to your watchlist` : `${symbol} removed from your watchlist`);
-      return on;
+      if (res.error) P.toast(res.error, { tone: "warn", timeout: 5000 });
+      else P.toast(`${symbol} ${res.on ? "added to" : "removed from"} your watchlist${res.synced ? " · synced" : ""}`);
+      return res.on;
     });
 }
 
@@ -139,28 +125,13 @@ function detailBlock(symbol, list, { reveal = true } = {}) {
   list.push(card);
   if (reveal) requestAnimationFrame(() => card.reveal());
   const sit = inst.signal.status === "sit_out";
-  const sizerSlot = h("div", { class: "sizer-slot" });
-  const placeSizer = () => {
-    sizerSlot.replaceChildren(
-      sit
-        ? UI.emptyState({ icon: false, title: "No position to size", body: "Tudumm is sitting out on this instrument, so there is no entry, stop or target to size against." })
-        : engine.signalState(symbol).status === "queued"
-          ? UI.emptyState({ icon: false, title: "Sizer unlocks on reveal", body: "Levels are published the moment this signal reveals." })
-          : UI.createSizer(engine, symbol, settings, { onEditDefaults: () => P.openOptions() }),
-    );
-  };
-  placeSizer();
-  if (!sit && engine.signalState(symbol).status === "queued") {
-    let done = false;
-    list.push({
-      update(now) {
-        if (!done && engine.signalState(symbol, now).status !== "queued") {
-          done = true;
-          placeSizer();
-        }
-      },
-    });
-  }
+  const sizerSlot = h(
+    "div",
+    { class: "sizer-slot" },
+    sit
+      ? UI.emptyState({ icon: false, title: "No position to size", body: "Tudumm is sitting out on this instrument, so there is no entry, stop or target to size against." })
+      : UI.createSizer(engine, symbol, settings, { onEditDefaults: () => P.openOptions() }),
+  );
   return [
     card.el,
     UI.layerBreakdown(engine, symbol),
@@ -178,7 +149,7 @@ function viewPage(list) {
     "div",
     { class: "section-head" },
     h("span", { class: "eyebrow" }, "On this tab"),
-    d && d.site ? h("span", { class: "here-src" }, h("b", {}, d.site === "preview" ? "simulated page" : hostOf(d.url) || d.siteLabel), d.via ? `via ${d.via === "preview" ? "?symbol=" : d.via}` : "") : null,
+    d && d.site ? h("span", { class: "here-src" }, h("b", {}, d.site === "preview" ? "preview page" : hostOf(d.url) || d.siteLabel), d.via ? `via ${d.via === "preview" ? "?symbol=" : d.via}` : "") : null,
   );
   if (d && d.symbol && engine.get(d.symbol)) {
     const [card, ...rest] = detailBlock(d.symbol, list);
@@ -192,7 +163,7 @@ function viewPage(list) {
         head,
         UI.emptyState({
           title: `${d.ticker} isn't covered yet`,
-          body: `This prototype covers ${engine.instruments.length} instruments across six markets. The feed shows every one of them.`,
+          body: `Tudumm covers ${engine.instruments.length} instruments across six markets. The feed shows every one of them.`,
           actions: [UI.button("Browse the feed", { kind: "primary", small: true, onClick: () => setTab("feed") })],
         }),
       ),
@@ -214,39 +185,6 @@ function viewPage(list) {
   ];
 }
 
-function drumroll(list) {
-  const q = queued();
-  const now = Date.now();
-  if (!q.length) {
-    if (revealedNotice && revealedNotice.until > now) {
-      const s = engine.snapshot(revealedNotice.symbol);
-      return h(
-        "div",
-        { class: "drumroll is-done", role: "status" },
-        UI.logoMark({ size: 30 }),
-        h("div", {}, h("span", { class: "eyebrow" }, "Revealed"), h("div", { class: "drumroll-time" }, `${s.confidencePct}%`)),
-        h("div", { class: "drumroll-what" }, h("b", {}, `${s.symbol} ${s.direction === "LONG" ? "▲" : "▼"} ${s.direction}`), h("span", {}, s.statusText)),
-      );
-    }
-    return null;
-  }
-  const sym = q[0];
-  const time = h("div", { class: "drumroll-time" }, engine.snapshot(sym).countdown);
-  list.push({
-    update(n) {
-      const s = engine.snapshot(sym, n);
-      if (s.countdown) time.textContent = s.countdown;
-    },
-  });
-  return h(
-    "button",
-    { type: "button", class: "drumroll", style: { textAlign: "left", appearance: "none", color: "inherit", width: "100%", font: "inherit" }, onclick: () => openDetail(sym), "aria-label": `Next reveal ${sym}. Open details.` },
-    UI.logoMark({ size: 30, drum: true }),
-    h("div", {}, h("span", { class: "eyebrow" }, "Next reveal in"), time),
-    h("div", { class: "drumroll-what" }, h("b", {}, sym), h("span", {}, `${engine.get(sym).name}${q.length > 1 ? ` · +${q.length - 1} queued` : ""}`)),
-  );
-}
-
 function viewFeed(list, revealed = []) {
   const counts = { ALL: engine.instruments.length };
   for (const i of engine.instruments) counts[i.market] = (counts[i.market] || 0) + 1;
@@ -260,7 +198,6 @@ function viewFeed(list, revealed = []) {
   );
   const now = Date.now();
   const inMarket = engine.instruments.filter((i) => market === "ALL" || i.market === market);
-  const q = inMarket.filter((i) => statusOf(i.symbol, now) === "queued").sort((a, b) => a.signal.revealAfterSec - b.signal.revealAfterSec);
   const liveSigs = inMarket.filter((i) => ["active", "pending", "t1_hit"].includes(statusOf(i.symbol, now))).sort((a, b) => b.signal.confidence - a.signal.confidence);
   const sits = inMarket.filter((i) => i.signal.status === "sit_out");
   let idx = 0;
@@ -274,13 +211,13 @@ function viewFeed(list, revealed = []) {
   const animate = !revealed.length;
   return [
     h("div", { class: "filters", role: "group", "aria-label": "Filter by market" }, chips),
-    drumroll(list),
-    q.length || liveSigs.length
+    liveMeta(),
+    liveSigs.length
       ? h(
           "section",
           {},
-          h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, "Live signals"), h("span", { class: "eyebrow-aux mono" }, `${liveSigs.length} live${q.length ? ` · ${q.length} queued` : ""} · by confidence`)),
-          h("div", { class: `rows${animate ? " stagger" : ""}` }, rowsFor(q), rowsFor(liveSigs)),
+          h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, `Open signals · ${liveSigs.length}`), UI.engineTag({ small: true })),
+          h("div", { class: `rows${animate ? " stagger" : ""}` }, rowsFor(liveSigs)),
         )
       : null,
     sits.length
@@ -291,41 +228,70 @@ function viewFeed(list, revealed = []) {
           h("div", { class: `rows${animate ? " stagger" : ""}` }, rowsFor(sits)),
         )
       : null,
-    !q.length && !liveSigs.length && !sits.length ? UI.emptyState({ icon: false, title: "Nothing in this market", body: "Pick another market above." }) : null,
+    !liveSigs.length && !sits.length ? UI.emptyState({ icon: false, title: "Nothing in this market", body: "Pick another market above." }) : null,
     ledgerPanel(),
     UI.disclaimer(),
   ];
 }
 
+/** Feed header: how fresh the data is. */
+function liveMeta() {
+  const p = data.payload;
+  const at = p && p.fetchedAt ? new Date(p.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  const ticks =
+    tickStatus === "live" ? "streaming from Binance" : tickStatus === "retrying" ? "Binance stream reconnecting" : tickStatus === "paused" ? "Binance stream paused while hidden" : tickStatus === "connecting" ? "connecting to Binance" : null;
+  return h(
+    "p",
+    { class: "feed-meta mono", id: "feed-meta" },
+    `Signals and prices refreshed ${at} · every 60 s`,
+    ticks ? ` · crypto + PAXG ${ticks}` : "",
+    p && p.stale ? " · last refresh failed, showing the previous data" : "",
+  );
+}
+
 function ledgerPanel() {
   const st = engine.ledgerStats();
   const kpi = (k, v) => h("div", { class: "kpi" }, h("dt", {}, k), h("dd", {}, v));
+  const judged = !st.tooFew;
   return h(
     "section",
     { class: "ledger", "aria-label": "Track record" },
-    h("span", { class: "eyebrow" }, "Simulated demo ledger"),
+    h("span", { class: "eyebrow" }, "Live ledger · v2"),
     h("h3", {}, "Every call on the record."),
     h(
       "dl",
       { class: "ledger-kpis", style: { margin: 0 } },
       kpi("Closed calls", String(st.count)),
-      kpi("Win rate", formatPct(st.winRate, 1).replace("+", "")),
-      kpi("Expectancy", formatR(st.expectancy)),
+      kpi("Win rate", judged ? formatPct(st.winRate, 1).replace("+", "") : "—"),
+      kpi("Expectancy", judged ? formatR(st.expectancy) : "—"),
     ),
-    h("p", { class: "ledger-head", style: { margin: 0 } }, `Hash-chained (SHA-256) · head ${st.head ? st.head.slice(0, 12) : "—"}…`),
+    st.tooFew ? h("p", { class: "ledger-head", style: { margin: 0 } }, `${st.count} closed call${st.count === 1 ? "" : "s"} — too few to judge. Win rate and expectancy show from 30.`) : null,
+    h("p", { class: "ledger-head", style: { margin: 0 } }, `Hash-chained (SHA-256) · ${st.entries} entries · head ${st.head ? st.head.slice(0, 12) : "—"}…`),
     UI.button("Verify the chain in the terminal", { small: true, icon: "↗", onClick: () => P.openTerminal(null, "/app/proof") }),
   );
 }
 
+function accountBlock() {
+  if (!acctPanel) {
+    acctPanel = createAccountPanel({
+      compact: true,
+      onLinked: () => P.toast("Linked. Your watchlist now syncs with your Tudumm account.", { tone: "ok", timeout: 4000 }),
+    });
+  }
+  return acctPanel.el;
+}
+
 function viewWatch(list) {
   const items = watch.filter((s) => engine.get(s));
+  const linked = !!(acctPanel && acctPanel.state && acctPanel.state.linked);
   if (!items.length) {
     return [
       UI.emptyState({
         title: "Your watchlist is empty",
-        body: "Tap the star on any signal to keep it here. It's stored in this browser only.",
+        body: linked ? "Tap the star on any signal to keep it here. It syncs with your Tudumm account." : "Tap the star on any signal to keep it here. Without a linked account it's stored in this browser only.",
         actions: [UI.button("Browse the feed", { kind: "primary", small: true, onClick: () => setTab("feed") })],
       }),
+      accountBlock(),
       UI.disclaimer(),
     ];
   }
@@ -341,6 +307,8 @@ function viewWatch(list) {
       h("div", { class: "section-head" }, h("span", { class: "eyebrow" }, "Watchlist"), h("span", { class: "eyebrow-aux mono" }, `${items.length} starred`)),
       h("div", { class: "rows stagger" }, rows),
     ),
+    watch.length > items.length ? h("p", { class: "feed-meta" }, `${watch.length - items.length} more starred in your account aren't covered by this data set.`) : null,
+    accountBlock(),
     UI.disclaimer(),
   ];
 }
@@ -360,7 +328,7 @@ function viewDetail(list) {
 }
 
 function openDetail(symbol) {
-  if (!engine.get(symbol)) return;
+  if (!engine || !engine.get(symbol)) return;
   if (tab === "page" && pageDet && pageDet.symbol === symbol) return render();
   if (tab === "page") tab = "feed";
   detail = symbol;
@@ -374,15 +342,21 @@ function closeDetail() {
 }
 
 function render({ keepScroll = false, revealed = [] } = {}) {
-  if (!engine) return;
+  if (!engine) return renderOffline();
   const scroll = $view.scrollTop;
   renderTabs();
   const list = [];
   const kids = detail ? viewDetail(list) : tab === "page" ? viewPage(list) : tab === "feed" ? viewFeed(list, revealed) : viewWatch(list);
   $view.replaceChildren(...kids.filter(Boolean));
   if (keepScroll) $view.scrollTop = scroll;
-  lastKey = queued().join(",");
   mount(list);
+}
+
+/** No live data: say so (with the API's reason) and retry. Nothing is filled in. */
+function renderOffline() {
+  mount([]);
+  $tabs.replaceChildren();
+  $view.replaceChildren(UI.offlineState({ onRetry: () => data.retry() }), UI.disclaimer());
 }
 
 document.addEventListener("keydown", (e) => {
@@ -395,17 +369,53 @@ document.addEventListener("keydown", (e) => {
 async function init() {
   document.documentElement.dataset.booted = "1";
   renderBar();
+  let ready = () => {};
+  const firstData = new Promise((resolve) => (ready = resolve));
+  data = createDataSession({
+    onSignals: ({ added }) => {
+      engine = data.engine;
+      UI.setData(data.payload);
+      if (detail && !engine.get(detail)) detail = null;
+      render({ keepScroll: true, revealed: added });
+      for (const s of added) {
+        const snap = engine.snapshot(s);
+        if (snap && snap.direction) P.toast(`New signal: ${s} ${snap.direction === "LONG" ? "▲" : "▼"} ${snap.direction}`, { tone: "ok" });
+      }
+    },
+    onMode: (payload, { modeChanged }) => {
+      engine = data.engine;
+      UI.setData(payload);
+      renderBar();
+      if (!engine) return renderOffline();
+      if (!booted) return ready();
+      if (modeChanged || UI.isLive()) render({ keepScroll: true });
+    },
+    onTickStatus: (s) => {
+      tickStatus = s;
+      const el = document.getElementById("feed-meta");
+      if (el && engine && engine.live) el.replaceWith(liveMeta());
+    },
+  });
   try {
-    engine = createEngine(await loadSeed());
+    await data.start();
+    engine = data.engine;
+    UI.setData(data.payload);
+    renderBar();
   } catch (err) {
     $view.replaceChildren(
       UI.emptyState({
-        title: "Couldn't load the demo data",
-        body: `The bundled seed file didn't load (${err && err.message ? err.message : "unknown error"}).`,
+        title: "Couldn't load market data",
+        body: `Live market data didn't load (${err && err.message ? err.message : "unknown error"}).`,
         actions: [UI.button("Retry", { kind: "primary", small: true, onClick: () => location.reload() })],
       }),
     );
     return;
+  }
+  if (!engine) {
+    // Offline: show it, and carry on once live data arrives (lib/live.js retries).
+    renderOffline();
+    await firstData;
+    engine = data.engine;
   }
   [settings, watch] = await Promise.all([P.getSettings(), P.getWatchlist()]);
   const initialTab = P.PARAMS.get("tab");
@@ -413,7 +423,8 @@ async function init() {
 
   let first = true;
   const detectFn = (p) => {
-    if (p.symbol) return engine.get(p.symbol) ? { site: "preview", siteLabel: "Simulated page", symbol: p.symbol, ticker: p.symbol, via: "preview" } : { site: "preview", siteLabel: "Simulated page", symbol: null, ticker: p.symbol, via: "preview" };
+    if (!engine) return null;
+    if (p.symbol) return engine.get(p.symbol) ? { site: "preview", siteLabel: "Preview page", symbol: p.symbol, ticker: p.symbol, via: "preview" } : { site: "preview", siteLabel: "Preview page", symbol: null, ticker: p.symbol, via: "preview" };
     const d = engine.detect(p.url, p.title);
     return d.site ? { ...d, url: p.url } : null;
   };
@@ -426,10 +437,11 @@ async function init() {
     else renderTabs();
   }, detectFn);
   first = false;
+  booted = true;
   render();
 
   P.watchSidepanelFocus((symbol) => {
-    if (!engine.get(symbol)) return;
+    if (!engine || !engine.get(symbol)) return;
     if (pageDet && pageDet.symbol === symbol) {
       tab = "page";
       detail = null;
