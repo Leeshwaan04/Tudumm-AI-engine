@@ -10,6 +10,7 @@ import { benchmarkTrend, buildDepthSnapshot } from "./snapshots";
 import type { SecFundamentals } from "../data/sec";
 import { peOf } from "./inputs";
 import { BINANCE_TF, fetchDepth, fetchKlines } from "../data/binance";
+import { bybitVenueLabel, fetchBybitDepth, fetchBybitKlines } from "../data/bybit";
 
 async function snaps(db: MarketDb, keys: string[]) {
   const [rows] = await db.read([readSnapshotsStmt(keys)]);
@@ -197,7 +198,13 @@ export async function depthView(db: MarketDb, i: InstrumentDef) {
       const s = buildDepthSnapshot(i.symbol, "Binance", d.bids, d.asks, new Date().toISOString());
       if (s) return { available: true, ...s, source: "binance", live: true };
     } catch {
-      /* fall back to the last stored snapshot */
+      try {
+        const d = await fetchBybitDepth(i.dataSymbol, 100);
+        const s = buildDepthSnapshot(i.symbol, bybitVenueLabel(i.dataSymbol), d.bids, d.asks, new Date().toISOString());
+        if (s) return { available: true, ...s, source: "bybit", live: true };
+      } catch {
+        /* fall back to the last stored snapshot */
+      }
     }
     const s = (await snaps(db, [`depth:${i.symbol}`])).get(`depth:${i.symbol}`);
     if (s?.json) return { available: true, ...(s.json as DepthSnapshot), source: "binance", live: false };
@@ -221,6 +228,12 @@ export async function candlesView(db: MarketDb, i: InstrumentDef, tf: string, li
       const bars = await fetchKlines(i.dataSymbol, BINANCE_TF[tf] ?? "4h", limit);
       return { symbol: i.symbol, tf, requestedTf: tf, ohlc: true, bars: bars.map(({ t, o, h, l, c, v }) => ({ t, o, h, l, c, v })), source: "binance", freshness: i.freshness, asOf: new Date().toISOString(), note: null };
     } catch {
+      try {
+        const bars = await fetchBybitKlines(i.dataSymbol, tf, limit);
+        return { symbol: i.symbol, tf, requestedTf: tf, ohlc: true, bars: bars.map(({ t, o, h, l, c, v }) => ({ t, o, h, l, c, v })), source: "bybit", freshness: i.freshness, asOf: new Date().toISOString(), note: `Served by ${bybitVenueLabel(i.dataSymbol)}: Binance is unreachable from this server.` };
+      } catch {
+        /* fall back to stored bars */
+      }
       if (tf !== "4H") return { symbol: i.symbol, tf, requestedTf: tf, ohlc: true, bars: [], source: "binance", freshness: i.freshness, asOf: null, note: "Binance is unreachable right now." };
       const [rows] = await db.read([readCandlesStmt([i.symbol], "4H", limit)]);
       return { symbol: i.symbol, tf, requestedTf: tf, ohlc: true, bars: (rows ?? []).map(rowBar), source: "binance", freshness: i.freshness, asOf: null, note: "Served from the last stored 4H bars (Binance unreachable)." };

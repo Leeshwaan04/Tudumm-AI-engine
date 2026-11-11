@@ -9,6 +9,8 @@ import { jsonList, parseJson, readSnapshotsStmt, stmt, upsertCandles, upsertQuot
 import type { Health } from "../data/http";
 import { tryFetch } from "../data/http";
 import { fetchBybit, fetchDepth, fetchKlines, fetchOiHist, fetchPremiumIndex, fetchTickers } from "../data/binance";
+import type { Ticker24h } from "../data/binance";
+import { bybitVenueLabel, fetchBybitDepth, fetchBybitKlines, fetchBybitSpotTicker } from "../data/bybit";
 import { fetchFng } from "../data/feargreed";
 import { fetchQuote } from "../data/cboe";
 import type { FxPoint } from "../data/frankfurter";
@@ -64,15 +66,36 @@ export async function cryptoJob(db: MarketDb, health: Health, now: Date): Promis
     fngDue ? tryFetch(health, "alternative-me", () => fetchFng()) : Promise.resolve(null),
   ]);
 
+  // Binance refuses some Cloudflare egress locations (HTTP 403/451). Fall back to Bybit spot per
+  // symbol, and label the venue that actually served the data (quotes, depth) — never pretend.
+  let tickerList: Ticker24h[] = tickers ?? [];
+  const venue = new Map<string, "binance" | "bybit">(tickerList.map((t) => [t.symbol, "binance" as const]));
+  const missingTick = BINANCE_SET.filter((i) => !venue.has(i.dataSymbol));
+  const [byTicks, byBars, byDepth] = await Promise.all([
+    Promise.all(missingTick.map((i) => tryFetch(health, "bybit", () => fetchBybitSpotTicker(i.dataSymbol)))),
+    Promise.all(BINANCE_SET.map((i, k) => (klines[k] ? Promise.resolve(null) : tryFetch(health, "bybit", () => fetchBybitKlines(i.dataSymbol, "4H", 250))))),
+    Promise.all(BINANCE_SET.map((i, k) => (depths[k] ? Promise.resolve(null) : tryFetch(health, "bybit", () => fetchBybitDepth(i.dataSymbol, 100))))),
+  ]);
+  for (const t of byTicks) {
+    if (!t) continue;
+    tickerList = [...tickerList, t];
+    venue.set(t.symbol, "bybit");
+  }
+  const depthLabel = BINANCE_SET.map((i, k) => (depths[k] ? "Binance" : byDepth[k] ? bybitVenueLabel(i.dataSymbol) : "Binance"));
+  BINANCE_SET.forEach((_, k) => {
+    if (!klines[k] && byBars[k]) klines[k] = byBars[k];
+    if (!depths[k] && byDepth[k]) depths[k] = byDepth[k];
+  });
+
   const quotes: QuoteRow[] = [];
   const candles: CandleRow[] = [];
   const snaps: SnapshotRow[] = [];
-  const tick = new Map((tickers ?? []).map((t) => [t.symbol, t]));
+  const tick = new Map(tickerList.map((t) => [t.symbol, t]));
   BINANCE_SET.forEach((i, k) => {
     const t = tick.get(i.dataSymbol);
     const bars = klines[k];
     if (t) {
-      const q: QuoteRow = { symbol: i.symbol, price: t.last, prevClose: t.open > 0 ? t.open : null, changePct: roundTo(t.changePct, 3), dayOpen: t.open, dayHigh: t.high, dayLow: t.low, volume: t.volume, bid: t.bid, ask: t.ask, bidSize: t.bidQty, askSize: t.askQty, asOf: nowIso, source: "binance" };
+      const q: QuoteRow = { symbol: i.symbol, price: t.last, prevClose: t.open > 0 ? t.open : null, changePct: roundTo(t.changePct, 3), dayOpen: t.open, dayHigh: t.high, dayLow: t.low, volume: t.volume, bid: t.bid, ask: t.ask, bidSize: t.bidQty, askSize: t.askQty, asOf: nowIso, source: venue.get(i.dataSymbol) === "bybit" ? "bybit" : "binance" };
       quotes.push(q);
       out.memQuotes[i.symbol] = { price: t.last, prevClose: q.prevClose, asOf: nowIso };
       out.prices[i.symbol] = t.last;
@@ -84,9 +107,10 @@ export async function cryptoJob(db: MarketDb, health: Health, now: Date): Promis
     }
     const d = depths[k];
     if (d) {
-      const ds = buildDepthSnapshot(i.symbol, "Binance", d.bids, d.asks, nowIso);
+      const label = depthLabel[k] ?? "Binance";
+      const ds = buildDepthSnapshot(i.symbol, label, d.bids, d.asks, nowIso);
       if (ds) {
-        snaps.push({ key: `depth:${i.symbol}`, json: ds, asOf: nowIso, source: "binance" });
+        snaps.push({ key: `depth:${i.symbol}`, json: ds, asOf: nowIso, source: label === "Binance" ? "binance" : "bybit" });
         out.memSnapshots[`depth:${i.symbol}`] = { json: ds, asOf: nowIso };
       }
     }
