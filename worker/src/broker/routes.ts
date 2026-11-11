@@ -66,7 +66,7 @@ const ORDER_ID_RE = /^[A-Za-z0-9]{1,32}$/;
 const NO_RESULT_ERROR = "relay_no_result: the relay claimed this order but never reported back. It MAY have been placed — check the Kite order book.";
 
 const NOT_CONFIGURED = {
-  hint: "Owner: set KITE_API_KEY and KITE_API_SECRET (npx wrangler secret put ...). See relay/README.md.",
+  hint: "Owner: run scripts/set-kite-secrets.sh (sets KITE_API_KEY, KITE_API_SECRET, BROKER_VAULT_KEY, RELAY_TOKEN).",
 };
 
 /* ======================= shared state helpers ======================= */

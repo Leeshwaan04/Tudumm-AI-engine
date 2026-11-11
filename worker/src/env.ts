@@ -29,7 +29,7 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
 
   // Zerodha Kite Connect (owner's own account, manual confirmation of every order). See
-  // worker/src/broker/* and relay/README.md. Login + read APIs need KITE_API_KEY + KITE_API_SECRET;
+  // worker/src/broker/*, relay/kite-relay.mjs and scripts/set-kite-secrets.sh. Login + read APIs need KITE_API_KEY + KITE_API_SECRET;
   // order placement additionally needs RELAY_TOKEN and the static-IP relay process.
   KITE_API_KEY?: string;
   KITE_API_SECRET?: string; // also the HKDF input for the AES-GCM key that encrypts the access token
