@@ -1,11 +1,11 @@
 {
-  // Tudumm prototype: static site (landing + terminal + hosted extension preview) on
-  // Cloudflare Workers static assets, fronted by a tiny Worker (security headers, optional UAT gate).
+  // Tudumm: Worker API (D1) + static site (landing, terminal, admin, hosted extension preview).
   // Cloudflare Workers Builds runs `npx wrangler deploy`, which runs build.command first.
+  // Secrets are NOT here — the owner sets them with scripts/set-secrets.sh.
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "tudumm-ai-engine",
-  "main": "deploy/worker/index.js",
-  "compatibility_date": "2026-10-01",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-07-29",
   "build": {
     "command": "bash scripts/build-site.sh"
   },
@@ -14,6 +14,26 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tudumm-db",
+      "database_id": "a23d4201-734e-4b5a-ba3d-1b6100211ef6",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "triggers": {
+    // */15: crypto + gold-proxy engine, US delayed quotes, signal lifecycle, alerts
+    // 45 13 * * 1-5: NSE end-of-day files (19:15 IST)   |   30 15 * * 1-5: ECB reference FX (~16:00 CET)
+    "crons": ["*/15 * * * *", "45 13 * * 1-5", "30 15 * * 1-5"]
+  },
+  "vars": {
+    "APP_ENV": "production",
+    "AUTH_DEV_CODES": "on",
+    "SEC_USER_AGENT": "Tudumm Research admin@tudumm.in",
+    "SITE_URL": "https://tudumm.in",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAF7ppLk3Bdymy03t"
   },
   "observability": { "enabled": true }
 }

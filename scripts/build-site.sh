@@ -4,12 +4,12 @@
 # via the "build" section of wrangler.jsonc.
 #
 #   SITE_URL  public origin the hosted extension preview / zip opens for "Open terminal"
-#             (default https://tudumm-ai-engine.sumitbagewadi6.workers.dev; set it to
-#             https://tudumm.in once the custom domain is attached).
+#             (default https://tudumm.in; override for previews, e.g.
+#             https://tudumm-ai-engine.sumitbagewadi6.workers.dev).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SITE_URL="${SITE_URL:-https://tudumm-ai-engine.sumitbagewadi6.workers.dev}"
+SITE_URL="${SITE_URL:-https://tudumm.in}"
 case "$SITE_URL" in https://*) ;; *) echo "SITE_URL must start with https://" >&2; exit 1 ;; esac
 
 echo "▸ ledger + seed"

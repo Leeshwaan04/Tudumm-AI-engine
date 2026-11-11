@@ -1,0 +1,29 @@
+{
+  "name": "tudumm-ai-engine",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Tudumm: multi-market signal engine \u2014 Cloudflare Worker API + web terminal + Chrome extension.",
+  "scripts": {
+    "dev:api": "wrangler dev --local --port 8787",
+    "typecheck:worker": "tsc -p worker/tsconfig.json",
+    "test:worker": "node --test worker/test/",
+    "db:migrate:local": "wrangler d1 migrations apply tudumm-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply tudumm-db --remote",
+    "build:site": "bash scripts/build-site.sh",
+    "test:market": "node --test worker/test/market-engine.test.ts worker/test/market-analytics.test.ts",
+    "ingest": "node --experimental-strip-types runner/ingest.ts",
+    "ingest:nse": "node --experimental-strip-types runner/ingest.ts nse-eod",
+    "ingest:us": "node --experimental-strip-types runner/ingest.ts us-daily",
+    "ingest:fx": "node --experimental-strip-types runner/ingest.ts fx-backfill",
+    "ingest:all": "node --experimental-strip-types runner/ingest.ts all"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261110.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.114.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
